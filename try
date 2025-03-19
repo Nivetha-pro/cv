@@ -1,50 +1,67 @@
-clc; clear; close all;
+import cv2
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+from sklearn.metrics import jaccard_score
 
-% Set paths for images and ground-truth masks
-image_folder = 'ball_frames/RGB';
-mask_folder = 'ball_frames/Masks';
-image_files = dir(fullfile(image_folder, '*.png'));
-mask_files = dir(fullfile(mask_folder, '*.png'));......../
+# Load images and masks
+def load_images_and_masks(folder):
+    images, masks = [], []
+    for filename in sorted(os.listdir(folder)):
+        if "_mask" in filename:
+            masks.append(cv2.imread(os.path.join(folder, filename), cv2.IMREAD_GRAYSCALE))
+        else:
+            images.append(cv2.imread(os.path.join(folder, filename)))
+    return images, masks
 
-num_images = length(image_files);
-dsc_values = zeros(num_images, 1);
+# Image segmentation using color thresholding and morphological operations
+def segment_ball(image):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower_red = np.array([0, 100, 100])
+    upper_red = np.array([10, 255, 255])
+    mask = cv2.inRange(hsv, lower_red, upper_red)
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    return mask
 
-for i = 1:num_images
-    % Read RGB image and corresponding mask
-    img = imread(fullfile(image_folder, image_files(i).name));
-    gt_mask = imread(fullfile(mask_folder, mask_files(i).name));
-    
-    % Convert to grayscale and apply thresholding
-    gray_img = rgb2gray(img);
-    bin_mask = imbinarize(gray_img, 'adaptive');
-    
-    % Morphological operations to remove noise
-    bin_mask = imopen(bin_mask, strel('disk', 5));
-    bin_mask = imclose(bin_mask, strel('disk', 5));
-    
-    % Compute Dice Similarity Score (DSC)
-    gt_mask = imbinarize(gt_mask); % Ensure ground-truth is binary
-    intersection = sum(bin_mask(:) & gt_mask(:));
-    dsc = (2 * intersection) / (sum(bin_mask(:)) + sum(gt_mask(:)));
-    dsc_values(i) = dsc;
-    
-    % Save segmentation results (optional)
-    segmented_img = uint8(bin_mask) * 255;
-    imwrite(segmented_img, fullfile('results', image_files(i).name));
-end
+# Compute Dice Similarity Score
+def dice_score(pred, gt):
+    pred = pred.flatten() > 0
+    gt = gt.flatten() > 0
+    return 2 * np.sum(pred & gt) / (np.sum(pred) + np.sum(gt))
 
-% Calculate mean and standard deviation of DSC
-mean_dsc = mean(dsc_values);
-std_dsc = std(dsc_values);
+# Main processing
+folder = "ball_frames/"
+images, ground_truths = load_images_and_masks(folder)
+dice_scores = []
+segmented_masks = []
 
-% Plot DSC values
-figure;
-bar(dsc_values);
-xlabel('Image Index');
-ylabel('Dice Similarity Score');
-title('Segmentation Performance');
-saveas(gcf, 'dsc_bar_chart.png');
+for i in range(len(images)):
+    seg_mask = segment_ball(images[i])
+    segmented_masks.append(seg_mask)
+    dsc = dice_score(seg_mask, ground_truths[i])
+    dice_scores.append(dsc)
 
-% Display results
-fprintf('Mean DSC: %.4f\n', mean_dsc);
-fprintf('Standard Deviation of DSC: %.4f\n', std_dsc);
+# Plot results
+plt.figure(figsize=(10, 5))
+plt.bar(range(len(dice_scores)), dice_scores)
+plt.xlabel("Image Index")
+plt.ylabel("Dice Score")
+plt.title("Dice Similarity Score for Each Image")
+plt.show()
+
+# Save best and worst results
+sorted_indices = np.argsort(dice_scores)
+print("Best Results:")
+for i in sorted_indices[-5:]:
+    cv2.imshow(f"Best {i}", segmented_masks[i])
+    cv2.imshow(f"Ground Truth {i}", ground_truths[i])
+    cv2.waitKey(0)
+
+print("Worst Results:")
+for i in sorted_indices[:5]:
+    cv2.imshow(f"Worst {i}", segmented_masks[i])
+    cv2.imshow(f"Ground Truth {i}", ground_truths[i])
+    cv2.waitKey(0)
+
+cv2.destroyAllWindows()
