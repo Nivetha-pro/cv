@@ -1,0 +1,34 @@
+clear; close all; clc;
+
+% Unzip the file into 'ball_frames' directory
+unzip("ball_frames.zip", 'ball_frames');
+
+% Define paths for RGB images and Mask images
+rgb_image_dir = 'ball_frames/RGB/';
+mask_image_dir = 'ball_frames/Mask/';
+
+% Get list of image files
+rgb_image_files = dir(fullfile(rgb_image_dir, '*.png'));
+mask_image_files = dir(fullfile(mask_image_dir, '*.png'));
+
+% Number of images
+num_images = length(rgb_image_files);
+dsc_values = zeros(num_images, 1);
+
+for i = 1:num_images
+    % Read RGB image and corresponding mask
+    img = imread(fullfile(rgb_image_dir, rgb_image_files(i).name));
+    gt_mask = imread(fullfile(mask_image_dir, mask_image_files(i).name));
+
+    % Convert to grayscale and apply adaptive binarization
+    gray_img = rgb2gray(img);
+    bin_mask = imbinarize(gray_img, 'adaptive', 'Sensitivity', 0.5);
+    
+    % Display the images for debugging
+    figure;
+    subplot(1, 3, 1); imshow(img); title('Original RGB');
+    subplot(1, 3, 2); imshow(gt_mask); title('Ground Truth Mask');
+    subplot(1, 3, 3); imshow(bin_mask); title('Binarized Image');
+
+end
+    
