@@ -1,13 +1,40 @@
 import os
+import zipfile
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from glob import glob
 
-# Define paths
-data_path = "/path/to/unzipped/ball_frames"
-rgb_images = sorted(glob(os.path.join(data_path, "RGB", "*.png")))
-mask_images = sorted(glob(os.path.join(data_path, "Masks", "*.png")))
+# Define paths (ensure the path separators are consistent)
+data_path = r"C:\Users\Student\Desktop\New folder\ball_frames.zip"  # Adjust this path to the location of your ZIP file
+extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"  # Folder to extract the ZIP contents
+
+# Extract the ZIP file if not already extracted
+if not os.path.exists(extracted_folder):
+    with zipfile.ZipFile(data_path, 'r') as zip_ref:
+        zip_ref.extractall(extracted_folder)
+
+# Debugging step: List the contents of the extracted folder to check its structure
+print("Contents of extracted folder:")
+for root, dirs, files in os.walk(extracted_folder):
+    print(f"Root: {root}")
+    print(f"Directories: {dirs}")
+    print(f"Files: {files}")
+
+# Check for RGB and GT image files (assuming they are in the same folder)
+rgb_images = sorted(glob(os.path.join(extracted_folder, "frame-*.png")))  # All frame-*.png files
+mask_images = sorted(glob(os.path.join(extracted_folder, "frame-*_GT.png")))  # All frame-*GT.png files
+
+# Debugging output for found files
+print(f"Found {len(rgb_images)} RGB images.")
+print(f"Found {len(mask_images)} mask images.")
+
+# Check if images are found
+if not rgb_images or not mask_images:
+    print("No RGB or mask images found. Please check the paths.")
+else:
+    print(f"Found {len(rgb_images)} RGB images.")
+    print(f"Found {len(mask_images)} mask images.")
 
 # Function to segment the ball using color thresholding
 def segment_ball(image):
@@ -40,11 +67,20 @@ for rgb_path, mask_path in zip(rgb_images, mask_images):
     img = cv2.imread(rgb_path)
     gt_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     
+    if img is None or gt_mask is None:
+        print(f"Error loading image or mask: {rgb_path}, {mask_path}")
+        continue
+    
     # Convert ground-truth mask to binary
     gt_mask = (gt_mask > 127).astype(np.uint8) * 255
     
     # Perform segmentation
     segmented = segment_ball(img)
+    
+    # Check if segmentation generated any meaningful mask
+    if np.sum(segmented) == 0:
+        print(f"No object detected in image {rgb_path}. Skipping this image.")
+        continue
     
     # Compute Dice Similarity Score
     dsc = dice_score(segmented, gt_mask)
@@ -66,18 +102,69 @@ for rgb_path, mask_path in zip(rgb_images, mask_images):
         plt.title(f"Segmented Mask (DSC={dsc:.2f})")
         plt.show()
 
-# Compute mean and standard deviation of DSC scores
-mean_dsc = np.mean(dsc_scores)
-std_dsc = np.std(dsc_scores)
+# Ensure we have scores before computing the mean and std
+if dsc_scores:
+    mean_dsc = np.mean(dsc_scores)
+    std_dsc = np.std(dsc_scores)
 
-print(f"Mean DSC: {mean_dsc:.4f}, Standard Deviation: {std_dsc:.4f}")
+    print(f"Mean DSC: {mean_dsc:.4f}, Standard Deviation: {std_dsc:.4f}")
 
-# Plot Dice scores for all images
-plt.figure(figsize=(10, 5))
-plt.bar(range(len(dsc_scores)), dsc_scores)
-plt.xlabel("Image Index")
-plt.ylabel("Dice Similarity Score")
-plt.title("DSC Scores for Each Image")
-plt.show()
+    # Plot Dice scores for all images
+    plt.figure(figsize=(10, 5))
+    plt.bar(range(len(dsc_scores)), dsc_scores)
+    plt.xlabel("Image Index")
+    plt.ylabel("Dice Similarity Score")
+    plt.title("DSC Scores for Each Image")
+    plt.show()
 
-    
+    # Display Best 5 and Worst 5 Images based on DSC
+    if len(dsc_scores) >= 5:
+        best_5_idx = np.argsort(dsc_scores)[-5:]  # Top 5 highest scores
+        worst_5_idx = np.argsort(dsc_scores)[:5]  # Bottom 5 lowest scores
+
+        # Plot the best 5
+        print("Displaying Best 5 Images:")
+        for idx in best_5_idx:
+            img = cv2.imread(rgb_images[idx])
+            mask = cv2.imread(mask_images[idx], cv2.IMREAD_GRAYSCALE)
+            segmented = segment_ball(img)
+
+            plt.figure(figsize=(10, 3))
+            plt.subplot(1, 3, 1)
+            plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            plt.title(f"Best: {dsc_scores[idx]:.2f} DSC")
+
+            plt.subplot(1, 3, 2)
+            plt.imshow(mask, cmap="gray")
+            plt.title("Ground Truth")
+
+            plt.subplot(1, 3, 3)
+            plt.imshow(segmented, cmap="gray")
+            plt.title("Segmented")
+
+            plt.show()
+
+        # Plot the worst 5
+        print("Displaying Worst 5 Images:")
+        for idx in worst_5_idx:
+            img = cv2.imread(rgb_images[idx])
+            mask = cv2.imread(mask_images[idx], cv2.IMREAD_GRAYSCALE)
+            segmented = segment_ball(img)
+
+            plt.figure(figsize=(10, 3))
+            plt.subplot(1, 3, 1)
+            plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            plt.title(f"Worst: {dsc_scores[idx]:.2f} DSC")
+
+            plt.subplot(1, 3, 2)
+            plt.imshow(mask, cmap="gray")
+            plt.title("Ground Truth")
+
+            plt.subplot(1, 3, 3)
+            plt.imshow(segmented, cmap="gray")
+            plt.title("Segmented")
+
+            plt.show()
+
+else:
+    print("No valid Dice Similarity Scores computed. Check your image processing steps.")
