@@ -117,54 +117,74 @@ if dsc_scores:
     plt.title("DSC Scores for Each Image")
     plt.show()
 
-    # Display Best 5 and Worst 5 Images based on DSC
-    if len(dsc_scores) >= 5:
-        best_5_idx = np.argsort(dsc_scores)[-5:]  # Top 5 highest scores
-        worst_5_idx = np.argsort(dsc_scores)[:5]  # Bottom 5 lowest scores
-
-        # Plot the best 5
-        print("Displaying Best 5 Images:")
-        for idx in best_5_idx:
-            img = cv2.imread(rgb_images[idx])
-            mask = cv2.imread(mask_images[idx], cv2.IMREAD_GRAYSCALE)
-            segmented = segment_ball(img)
-
-            plt.figure(figsize=(10, 3))
-            plt.subplot(1, 3, 1)
-            plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            plt.title(f"Best: {dsc_scores[idx]:.2f} DSC")
-
-            plt.subplot(1, 3, 2)
-            plt.imshow(mask, cmap="gray")
-            plt.title("Ground Truth")
-
-            plt.subplot(1, 3, 3)
-            plt.imshow(segmented, cmap="gray")
-            plt.title("Segmented")
-
-            plt.show()
-
-        # Plot the worst 5
-        print("Displaying Worst 5 Images:")
-        for idx in worst_5_idx:
-            img = cv2.imread(rgb_images[idx])
-            mask = cv2.imread(mask_images[idx], cv2.IMREAD_GRAYSCALE)
-            segmented = segment_ball(img)
-
-            plt.figure(figsize=(10, 3))
-            plt.subplot(1, 3, 1)
-            plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            plt.title(f"Worst: {dsc_scores[idx]:.2f} DSC")
-
-            plt.subplot(1, 3, 2)
-            plt.imshow(mask, cmap="gray")
-            plt.title("Ground Truth")
-
-            plt.subplot(1, 3, 3)
-            plt.imshow(segmented, cmap="gray")
-            plt.title("Segmented")
-
-            plt.show()
-
-else:
-    print("No valid Dice Similarity Scores computed. Check your image processing steps.")
+   def save_visualizations(results, mean_dsc, std_dsc, best_frames, worst_frames):
+    """Save visualizations to disk."""
+    output_dir = os.path.join(os.path.dirname(extracted_folder), "results")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save DSC bar chart
+    plt.figure(figsize=(14, 8))
+    image_indices = sorted(results.keys())
+    dsc_values = [results[idx]['dsc'] for idx in image_indices]
+    
+    plt.bar(image_indices, dsc_values, color='skyblue', edgecolor='navy')
+    plt.xlabel('Image Number (Index)', fontsize=12)
+    plt.ylabel('Dice Similarity Coefficient (DSC)', fontsize=12)
+    plt.title(f'Segmentation Performance\nMean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}', fontsize=14)
+    plt.ylim(0, 1)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'dsc_results.png'), dpi=300)
+    plt.close()
+    
+    # Save best and worst results
+    fig = plt.figure(figsize=(20, 24))
+    plt.suptitle('Appendix: Five Best and Five Worst Results', fontsize=20)
+    
+    # Plot best results
+    for i, frame_num in enumerate(best_frames):
+        result = results[frame_num]
+        rgb = cv2.imread(result['rgb_path'])
+        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        
+        # Original image
+        ax1 = plt.subplot(5, 4, i*2+1)
+        ax1.imshow(rgb)
+        ax1.set_title(f'Best #{i+1}: Frame {frame_num}', fontsize=12)
+        ax1.axis('off')
+        
+        # Overlay
+        ax2 = plt.subplot(5, 4, i*2+2)
+        ax2.imshow(rgb)
+        mask_rgb = np.zeros_like(rgb)
+        mask_rgb[:,:,1] = result['pred_mask'] * 255  # Green channel
+        ax2.imshow(mask_rgb, alpha=0.5)
+        ax2.set_title(f'DSC: {result["dsc"]:.4f}', fontsize=12)
+        ax2.axis('off')
+    
+    # Plot worst results
+    for i, frame_num in enumerate(worst_frames):
+        result = results[frame_num]
+        rgb = cv2.imread(result['rgb_path'])
+        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        
+        # Original image
+        ax1 = plt.subplot(5, 4, (i+5)*2+1)
+        ax1.imshow(rgb)
+        ax1.set_title(f'Worst #{i+1}: Frame {frame_num}', fontsize=12)
+        ax1.axis('off')
+        
+        # Overlay
+        ax2 = plt.subplot(5, 4, (i+5)*2+2)
+        ax2.imshow(rgb)
+        mask_rgb = np.zeros_like(rgb)
+        mask_rgb[:,:,1] = result['pred_mask'] * 255  # Green channel
+        ax2.imshow(mask_rgb, alpha=0.5)
+        ax2.set_title(f'DSC: {result["dsc"]:.4f}', fontsize=12)
+        ax2.axis('off')
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(os.path.join(output_dir, 'best_worst_results.png'), dpi=300)
+    plt.close()
+    
+    print(f"Visualizations saved to {output_dir}")
