@@ -1,0 +1,197 @@
+import cv2
+import numpy as np
+import os
+import glob
+import matplotlib.pyplot as plt
+from skimage.measure import label, regionprops
+
+def ball_segmentation(image_path):
+    """
+    Segment balls from the image using a combination of color-based segmentation
+    and morphological operations.
+    
+    Args:
+        image_path (str): Path to the input RGB image
+        
+    Returns:
+        numpy.ndarray: Binary mask where 1 represents ball pixels and 0 represents background
+    """
+    # Read the image
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
+    
+    # Convert to HSV color space for better color segmentation
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    
+    # Create binary masks for different colored balls
+    # Red balls (hue wraps around in HSV, so need two ranges)
+    lower_red1 = np.array([0, 100, 100])
+    upper_red1 = np.array([10, 255, 255])
+    mask_red1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    
+    lower_red2 = np.array([160, 100, 100])
+    upper_red2 = np.array([180, 255, 255])
+    mask_red2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    
+    # Blue balls
+    lower_blue = np.array([100, 100, 100])
+    upper_blue = np.array([140, 255, 255])
+    mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+    
+    # Green balls
+    lower_green = np.array([40, 100, 100])
+    upper_green = np.array([80, 255, 255])
+    mask_green = cv2.inRange(hsv, lower_green, upper_green)
+    
+    # Yellow balls
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([35, 255, 255])
+    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+    
+    # Orange balls
+    lower_orange = np.array([10, 100, 100])
+    upper_orange = np.array([20, 255, 255])
+    mask_orange = cv2.inRange(hsv, lower_orange, upper_orange)
+    
+    # Pink/purple balls
+    lower_pink = np.array([140, 50, 100])
+    upper_pink = np.array([170, 255, 255])
+    mask_pink = cv2.inRange(hsv, lower_pink, upper_pink)
+    
+    # Combine all masks
+    combined_mask = mask_red1 | mask_red2 | mask_blue | mask_green | mask_yellow | mask_orange | mask_pink
+    
+    # Apply morphological operations to clean up the mask
+    kernel = np.ones((5, 5), np.uint8)
+    mask_opened = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+    mask_closed = cv2.morphologyEx(mask_opened, cv2.MORPH_CLOSE, kernel)
+    
+    # Remove small noise regions and fill holes in balls
+    labeled_mask = label(mask_closed)
+    props = regionprops(labeled_mask)
+    
+    # Create a new clean mask with only sufficiently large regions
+    clean_mask = np.zeros_like(mask_closed)
+    min_area = 200  # Minimum area to be considered a ball
+    for prop in props:
+        if prop.area >= min_area:
+            clean_mask[labeled_mask == prop.label] = 255
+    
+    # Convert to binary (0 and 1) format
+    binary_mask = (clean_mask > 0).astype(np.uint8)
+    
+    return binary_mask
+
+def calculate_dsc(pred_mask, gt_mask):
+    """
+    Calculate Dice Similarity Coefficient between prediction and ground truth.
+    
+    Args:
+        pred_mask (numpy.ndarray): Predicted binary mask
+        gt_mask (numpy.ndarray): Ground truth binary mask
+        
+    Returns:
+        float: DSC value between 0 and 1
+    """
+    # Ensure binary format
+    pred_mask = (pred_mask > 0).astype(np.uint8)
+    gt_mask = (gt_mask > 0).astype(np.uint8)
+    
+    # Calculate intersection and union
+    intersection = np.logical_and(pred_mask, gt_mask).sum()
+    dsc = (2. * intersection) / (pred_mask.sum() + gt_mask.sum())
+    
+    return dsc if not np.isnan(dsc) else 0.0
+
+def process_all_images(rgb_dir, gt_dir):
+    """
+    Process all images in the dataset and evaluate performance.
+    
+    Args:
+        rgb_dir (str): Directory containing RGB images
+        gt_dir (str): Directory containing ground truth masks
+        
+    Returns:
+        tuple: (List of DSC values, List of image indices, Dict of results for each image)
+    """
+    # Get all RGB image paths
+    rgb_paths = sorted(glob.glob(os.path.join(rgb_dir, "*.jpg")))
+    
+    # Store results
+    dsc_values = []
+    image_indices = []
+    results = {}
+    
+    for i, rgb_path in enumerate(rgb_paths):
+        # Get filename without extension
+        base_name = os.path.basename(rgb_path).split('.')[0]
+        image_index = int(base_name.split('_')[-1])
+        image_indices.append(image_index)
+        
+        # Get corresponding ground truth path
+        gt_path = os.path.join(gt_dir, f"{base_name}_mask.png")
+        
+        # Check if ground truth file exists
+        if not os.path.exists(gt_path):
+            print(f"Warning: No ground truth found for {base_name}")
+            continue
+        
+        # Segment the image
+        pred_mask = ball_segmentation(rgb_path)
+        
+        # Read ground truth
+        gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+        gt_mask = (gt_mask > 0).astype(np.uint8)
+        
+        # Calculate DSC
+        dsc = calculate_dsc(pred_mask, gt_mask)
+        dsc_values.append(dsc)
+        
+        # Store results
+        results[image_index] = {
+            'rgb_path': rgb_path,
+            'gt_path': gt_path,
+            'pred_mask': pred_mask,
+            'gt_mask': gt_mask,
+            'dsc': dsc
+        }
+        
+        print(f"Processed image {base_name}: DSC = {dsc:.4f}")
+    
+    return dsc_values, image_indices, results
+
+def plot_results(dsc_values, image_indices, results, output_dir):
+    """
+    Plot results and save visualizations.
+    
+    Args:
+        dsc_values (list): List of DSC values
+        image_indices (list): List of image indices
+        results (dict): Dictionary of results for each image
+        output_dir (str): Directory to save output visualizations
+    """
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Calculate mean and standard deviation of DSC
+    mean_dsc = np.mean(dsc_values)
+    std_dsc = np.std(dsc_values)
+    print(f"Mean DSC: {mean_dsc:.4f}")
+    print(f"Standard Deviation of DSC: {std_dsc:.4f}")
+    
+    # Plot bar chart of DSC values
+    plt.figure(figsize=(12, 6))
+    plt.bar(image_indices, dsc_values)
+    plt.xlabel('Image Index')
+    plt.ylabel('Dice Similarity Coefficient (DSC)')
+    plt.title(f'Segmentation Performance (Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f})')
+    plt.ylim(0, 1)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.savefig(os.path.join(output_dir, 'dsc_plot.png'), dpi=300, bbox_inches='tight')
+    
+    # Identify 5 best and 5 worst results
+    sorted_indices = np.argsort(dsc_values)
+    worst_5_indices = [image_indices[i] for i in sorted_indices[:5]]
+    best_5_indices = [image_indices[i] for i in sorted_indices[-5:]]
+    
+    # Save best and worst results
