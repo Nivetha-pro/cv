@@ -2,66 +2,122 @@ import cv2
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from sklearn.metrics import jaccard_score
 
-# Load images and masks
+# Load RGB images and corresponding ground-truth masks
 def load_images_and_masks(folder):
     images, masks = [], []
     for filename in sorted(os.listdir(folder)):
-        if "_mask" in filename:
+        if "_GT" in filename:  # Masks contain '_GT' in their filenames
             masks.append(cv2.imread(os.path.join(folder, filename), cv2.IMREAD_GRAYSCALE))
-        else:
+        elif not filename.startswith('.'):
             images.append(cv2.imread(os.path.join(folder, filename)))
     return images, masks
 
-# Image segmentation using color thresholding and morphological operations
+# Automated Ball Segmentation using color thresholding (HSV)
 def segment_ball(image):
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    # Define range for detecting red color (for the ball)
     lower_red = np.array([0, 100, 100])
     upper_red = np.array([10, 255, 255])
+    
+    # Create binary mask where red is detected
     mask = cv2.inRange(hsv, lower_red, upper_red)
+
+    # Use morphological operations to remove noise and close small holes
     kernel = np.ones((5, 5), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    
     return mask
 
-# Compute Dice Similarity Score
+# Compute Dice Similarity Score (DSC)
 def dice_score(pred, gt):
-    pred = pred.flatten() > 0
-    gt = gt.flatten() > 0
+    pred = pred.flatten() > 0  # Binary prediction mask
+    gt = gt.flatten() > 0  # Binary ground truth mask
     return 2 * np.sum(pred & gt) / (np.sum(pred) + np.sum(gt))
 
-# Main processing
+# Main processing function
+def process_images(folder):
+    images, ground_truths = load_images_and_masks(folder)
+
+    # Check if number of images matches number of ground truths
+    if len(images) != len(ground_truths):
+        print(f"Warning: Number of images ({len(images)}) and ground truths ({len(ground_truths)}) do not match!")
+        return
+
+    dice_scores = []
+    segmented_masks = []
+
+    # Process each image
+    for i in range(len(images)):
+        seg_mask = segment_ball(images[i])
+
+        # Check if no object was detected in the image
+        if np.sum(seg_mask) == 0:
+            print(f"No object detected in image {os.path.basename(images[i])}, skipping this image.")
+            continue
+
+        segmented_masks.append(seg_mask)
+        # Calculate Dice Similarity Score
+        dsc = dice_score(seg_mask, ground_truths[i])
+        dice_scores.append(dsc)
+
+    # Calculate Mean and Standard Deviation of DSC
+    mean_dsc = np.mean(dice_scores)
+    std_dsc = np.std(dice_scores)
+
+    print(f"Mean DSC: {mean_dsc:.4f}, Standard Deviation: {std_dsc:.4f}")
+
+    # Get best and worst results based on Dice Similarity Score
+    sorted_indices = np.argsort(dice_scores)
+
+    # Display Best 5 Images
+    print("Displaying Best 5 Images:")
+    best_images = sorted_indices[-5:]
+    worst_images = sorted_indices[:5]
+
+    # Create a window to show the best and worst images with their masks
+    for i in best_images:
+        # Original Image and Segmentation Mask (Best)
+        original_image = images[i]
+        mask_image = segmented_masks[i]
+        ground_truth_image = ground_truths[i]
+        
+        # Stack the original image and the mask side by side
+        combined_best = np.hstack((original_image, cv2.cvtColor(mask_image, cv2.COLOR_GRAY2BGR), cv2.cvtColor(ground_truth_image, cv2.COLOR_GRAY2BGR)))
+        
+        # Show the combined image (Original + Mask)
+        cv2.imshow(f"Best Image {i} - DSC: {dice_scores[i]:.4f}", combined_best)
+        cv2.waitKey(0)
+
+    print("Displaying Worst 5 Images:")
+    for i in worst_images:
+        # Original Image and Segmentation Mask (Worst)
+        original_image = images[i]
+        mask_image = segmented_masks[i]
+        ground_truth_image = ground_truths[i]
+        
+        # Stack the original image and the mask side by side
+        combined_worst = np.hstack((original_image, cv2.cvtColor(mask_image, cv2.COLOR_GRAY2BGR), cv2.cvtColor(ground_truth_image, cv2.COLOR_GRAY2BGR)))
+        
+        # Show the combined image (Original + Mask)
+        cv2.imshow(f"Worst Image {i} - DSC: {dice_scores[i]:.4f}", combined_worst)
+        cv2.waitKey(0)
+
+    cv2.destroyAllWindows()
+
+    # Plot the Dice Similarity Scores
+    plt.figure(figsize=(12, 6))
+    plt.bar(range(len(dice_scores)), dice_scores)
+    plt.xlabel("Image Index")
+    plt.ylabel("Dice Similarity Score (DSC)")
+    plt.title("Dice Similarity Scores for Each Image")
+    plt.xticks(range(len(dice_scores)), range(1, len(dice_scores) + 1))  # Show image numbers on x-axis
+    plt.tight_layout()
+    plt.show()
+
+# Set the folder path containing the images and ground truth masks
 folder = "ball_frames/"
-images, ground_truths = load_images_and_masks(folder)
-dice_scores = []
-segmented_masks = []
 
-for i in range(len(images)):
-    seg_mask = segment_ball(images[i])
-    segmented_masks.append(seg_mask)
-    dsc = dice_score(seg_mask, ground_truths[i])
-    dice_scores.append(dsc)
-
-# Plot results
-plt.figure(figsize=(10, 5))
-plt.bar(range(len(dice_scores)), dice_scores)
-plt.xlabel("Image Index")
-plt.ylabel("Dice Score")
-plt.title("Dice Similarity Score for Each Image")
-plt.show()
-
-# Save best and worst results
-sorted_indices = np.argsort(dice_scores)
-print("Best Results:")
-for i in sorted_indices[-5:]:
-    cv2.imshow(f"Best {i}", segmented_masks[i])
-    cv2.imshow(f"Ground Truth {i}", ground_truths[i])
-    cv2.waitKey(0)
-
-print("Worst Results:")
-for i in sorted_indices[:5]:
-    cv2.imshow(f"Worst {i}", segmented_masks[i])
-    cv2.imshow(f"Ground Truth {i}", ground_truths[i])
-    cv2.waitKey(0)
-
-cv2.destroyAllWindows()
+# Process the images and masks
+process_images(folder)
