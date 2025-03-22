@@ -183,7 +183,6 @@ def save_visualizations(results, mean_dsc, std_dsc, best_frames, worst_frames):
 
 
 def process_images_and_display_results():
-    """Process all images and display results on screen."""
     dsc_values = []
     results = {}
     
