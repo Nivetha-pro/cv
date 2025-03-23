@@ -50,7 +50,7 @@ def calculate_dsc(pred_mask, gt_mask):
     
     return (2.0 * intersection) / union if union > 0 else 1.0 if intersection == 0 else 0.0
 
-def visualize_results(original, pred_mask, gt_mask, dsc, frame_num, save_path):
+def visualize_results(original, pred_mask, gt_mask, dsc, frame_num, save_path, show=False):
     """Create visualization of results with original image, predictions, and ground truth."""
     # Create overlay of prediction on original image
     pred_overlay = original.copy()
@@ -80,7 +80,11 @@ def visualize_results(original, pred_mask, gt_mask, dsc, frame_num, save_path):
     
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.close()
+    
+    if show:
+        plt.show()
+    else:
+        plt.close()
 
 def main():
     # Setup paths
@@ -135,7 +139,7 @@ def main():
     plt.ylim(0, 1)
     plt.grid(axis='y', alpha=0.7)
     plt.savefig('results/dsc_plot.png', dpi=300)
-    plt.close()
+    plt.show()  # Display the DSC plot
     
     # Get best and worst frames
     frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
@@ -146,6 +150,7 @@ def main():
     print(f"Worst frames: {worst_frames}")
     
     # Visualize best frames
+    print("\nDisplaying best frames...")
     for i, frame_num in enumerate(best_frames):
         frame_data = results[frame_num]
         save_path = f"results/best/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png"
@@ -155,10 +160,12 @@ def main():
             frame_data['gt_mask'],
             frame_data['dsc'],
             frame_num,
-            save_path
+            save_path,
+            show=True  # Show the best frames
         )
     
     # Visualize worst frames
+    print("\nDisplaying worst frames...")
     for i, frame_num in enumerate(worst_frames):
         frame_data = results[frame_num]
         save_path = f"results/worst/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png"
@@ -168,10 +175,12 @@ def main():
             frame_data['gt_mask'],
             frame_data['dsc'],
             frame_num,
-            save_path
+            save_path,
+            show=True  # Show the worst frames
         )
     
     # Create summary visualization of best and worst frames
+    print("\nDisplaying summary of best and worst frames...")
     plt.figure(figsize=(15, 10))
     
     # Plot best frames
@@ -190,7 +199,7 @@ def main():
     
     plt.tight_layout()
     plt.savefig('results/best_worst_summary.png', dpi=300)
-    plt.close()
+    plt.show()  # Display the summary
 
 if __name__ == "__main__":
     main()
