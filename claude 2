@@ -50,41 +50,12 @@ def calculate_dsc(pred_mask, gt_mask):
     
     return (2.0 * intersection) / union if union > 0 else 1.0 if intersection == 0 else 0.0
 
-def visualize_results(original, pred_mask, gt_mask, dsc, frame_num, save_path, show=False):
-    """Create visualization of results with original image, predictions, and ground truth."""
-    # Create overlay of prediction on original image
-    pred_overlay = original.copy()
-    pred_mask_rgb = np.zeros_like(original)
-    pred_mask_rgb[:,:,1] = pred_mask * 255  # Green channel for predictions
-    pred_overlay = cv2.addWeighted(pred_overlay, 0.7, pred_mask_rgb, 0.3, 0)
-    
-    # Create overlay of ground truth on original image
-    gt_overlay = original.copy()
-    gt_mask_rgb = np.zeros_like(original)
-    gt_mask_rgb[:,:,0] = gt_mask * 255  # Red channel for ground truth
-    gt_overlay = cv2.addWeighted(gt_overlay, 0.7, gt_mask_rgb, 0.3, 0)
-    
-    # Combined visualization
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    axes[0].imshow(original)
-    axes[0].set_title("Original Image")
-    axes[0].axis('off')
-    
-    axes[1].imshow(pred_overlay)
-    axes[1].set_title(f"Prediction (DSC: {dsc:.4f})")
-    axes[1].axis('off')
-    
-    axes[2].imshow(gt_overlay)
-    axes[2].set_title("Ground Truth")
-    axes[2].axis('off')
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    
-    if show:
-        plt.show()
-    else:
-        plt.close()
+def create_overlay(original, mask, color_channel=1):
+    """Create an overlay of mask on original image."""
+    overlay = original.copy()
+    mask_rgb = np.zeros_like(original)
+    mask_rgb[:,:,color_channel] = mask * 255  # Default: Green channel (1) for predictions
+    return cv2.addWeighted(overlay, 0.7, mask_rgb, 0.3, 0)
 
 def main():
     # Setup paths
@@ -125,21 +96,8 @@ def main():
     std_dsc = np.std(dsc_values)
     print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
     
-    # Create output directories
+    # Create output directory
     os.makedirs("results", exist_ok=True)
-    os.makedirs("results/best", exist_ok=True)
-    os.makedirs("results/worst", exist_ok=True)
-    
-    # Plot DSC bar chart
-    plt.figure(figsize=(10, 6))
-    plt.bar(sorted(results.keys()), [results[k]['dsc'] for k in sorted(results.keys())])
-    plt.xlabel('Image Index')
-    plt.ylabel('DSC')
-    plt.title(f'Segmentation Results: Mean DSC = {mean_dsc:.4f} ± {std_dsc:.4f}')
-    plt.ylim(0, 1)
-    plt.grid(axis='y', alpha=0.7)
-    plt.savefig('results/dsc_plot.png', dpi=300)
-    plt.show()  # Display the DSC plot
     
     # Get best and worst frames
     frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
@@ -149,57 +107,81 @@ def main():
     print(f"Best frames: {best_frames}")
     print(f"Worst frames: {worst_frames}")
     
-    # Visualize best frames
-    print("\nDisplaying best frames...")
+    # Create comprehensive visualization of all results
+    fig = plt.figure(figsize=(20, 15))
+    
+    # First row: DSC bar chart
+    plt.subplot(3, 1, 1)
+    plt.bar(sorted(results.keys()), [results[k]['dsc'] for k in sorted(results.keys())])
+    plt.xlabel('Image Index')
+    plt.ylabel('DSC')
+    plt.title(f'Segmentation Results: Mean DSC = {mean_dsc:.4f} ± {std_dsc:.4f}')
+    plt.ylim(0, 1)
+    plt.grid(axis='y', alpha=0.7)
+    
+    # Second row: Best frames (with original, prediction overlay, and ground truth)
+    gs = fig.add_gridspec(4, 15, height_ratios=[1, 2, 0.25, 2])
+    
+    # Header for best frames
+    header_ax = fig.add_subplot(gs[1, :])
+    header_ax.text(0.5, 0.5, "Best 5 Frames", fontsize=16, horizontalalignment='center')
+    header_ax.axis('off')
+    
     for i, frame_num in enumerate(best_frames):
         frame_data = results[frame_num]
-        save_path = f"results/best/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png"
-        visualize_results(
-            frame_data['original_img'],
-            frame_data['pred_mask'],
-            frame_data['gt_mask'],
-            frame_data['dsc'],
-            frame_num,
-            save_path,
-            show=True  # Show the best frames
-        )
+        
+        # Original image
+        ax1 = fig.add_subplot(gs[2, i*3])
+        ax1.imshow(frame_data['original_img'])
+        ax1.set_title(f"Frame {frame_num}\nDSC: {frame_data['dsc']:.4f}")
+        ax1.axis('off')
+        
+        # Prediction overlay
+        ax2 = fig.add_subplot(gs[2, i*3+1])
+        pred_overlay = create_overlay(frame_data['original_img'], frame_data['pred_mask'], color_channel=1)  # Green
+        ax2.imshow(pred_overlay)
+        ax2.set_title("Prediction")
+        ax2.axis('off')
+        
+        # Ground truth overlay
+        ax3 = fig.add_subplot(gs[2, i*3+2])
+        gt_overlay = create_overlay(frame_data['original_img'], frame_data['gt_mask'], color_channel=0)  # Red
+        ax3.imshow(gt_overlay)
+        ax3.set_title("Ground Truth")
+        ax3.axis('off')
     
-    # Visualize worst frames
-    print("\nDisplaying worst frames...")
+    # Header for worst frames
+    separator_ax = fig.add_subplot(gs[3, :])
+    separator_ax.text(0.5, 0.5, "Worst 5 Frames", fontsize=16, horizontalalignment='center')
+    separator_ax.axis('off')
+    
+    # Third row: Worst frames (with original, prediction overlay, and ground truth)
     for i, frame_num in enumerate(worst_frames):
         frame_data = results[frame_num]
-        save_path = f"results/worst/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png"
-        visualize_results(
-            frame_data['original_img'],
-            frame_data['pred_mask'],
-            frame_data['gt_mask'],
-            frame_data['dsc'],
-            frame_num,
-            save_path,
-            show=True  # Show the worst frames
-        )
-    
-    # Create summary visualization of best and worst frames
-    print("\nDisplaying summary of best and worst frames...")
-    plt.figure(figsize=(15, 10))
-    
-    # Plot best frames
-    for i, frame_num in enumerate(best_frames):
-        plt.subplot(2, 5, i+1)
-        plt.imshow(results[frame_num]['original_img'])
-        plt.title(f"Best #{i+1}: Frame {frame_num}\nDSC: {results[frame_num]['dsc']:.4f}")
-        plt.axis('off')
-    
-    # Plot worst frames
-    for i, frame_num in enumerate(worst_frames):
-        plt.subplot(2, 5, 5+i+1)
-        plt.imshow(results[frame_num]['original_img'])
-        plt.title(f"Worst #{i+1}: Frame {frame_num}\nDSC: {results[frame_num]['dsc']:.4f}")
-        plt.axis('off')
+        
+        # Original image
+        ax1 = fig.add_subplot(gs[4, i*3])
+        ax1.imshow(frame_data['original_img'])
+        ax1.set_title(f"Frame {frame_num}\nDSC: {frame_data['dsc']:.4f}")
+        ax1.axis('off')
+        
+        # Prediction overlay
+        ax2 = fig.add_subplot(gs[4, i*3+1])
+        pred_overlay = create_overlay(frame_data['original_img'], frame_data['pred_mask'], color_channel=1)  # Green
+        ax2.imshow(pred_overlay)
+        ax2.set_title("Prediction")
+        ax2.axis('off')
+        
+        # Ground truth overlay
+        ax3 = fig.add_subplot(gs[4, i*3+2])
+        gt_overlay = create_overlay(frame_data['original_img'], frame_data['gt_mask'], color_channel=0)  # Red
+        ax3.imshow(gt_overlay)
+        ax3.set_title("Ground Truth")
+        ax3.axis('off')
     
     plt.tight_layout()
-    plt.savefig('results/best_worst_summary.png', dpi=300)
-    plt.show()  # Display the summary
+    plt.savefig('results/comprehensive_results.png', dpi=300, bbox_inches='tight')
+    plt.show()
 
 if __name__ == "__main__":
     main()
