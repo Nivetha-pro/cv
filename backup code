@@ -83,7 +83,7 @@ def main():
         # Find corresponding ground truth
         gt_path = os.path.join(data_dir, f"{base_name}_GT.png")
         if not os.path.exists(gt_path):
-            print(f"❌ No ground truth for frame {frame_num}")
+            print(f" No ground truth for frame {frame_num}")
             continue
             
         # Perform segmentation and load GT mask
@@ -99,7 +99,7 @@ def main():
             'gt_mask': gt_mask,
             'dsc': dsc
         }
-        print(f"✅ Frame {frame_num}: DSC = {dsc:.4f}")
+        print(f" Frame {frame_num}: DSC = {dsc:.4f}")
     
     # Compute DSC statistics
     mean_dsc = np.mean(dsc_values)
@@ -114,8 +114,8 @@ def main():
     worst_frames = frames_by_dsc[:5]
     best_frames = frames_by_dsc[-5:]
 
-    print(f"🏆 Best Frames: {best_frames}")
-    print(f"🚨 Worst Frames: {worst_frames}")
+    print(f" Best Frames: {best_frames}")
+    print(f" Worst Frames: {worst_frames}")
 
     # Visualization
     fig, axes = plt.subplots(3, 1, figsize=(15, 10))
