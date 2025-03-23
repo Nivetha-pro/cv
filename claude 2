@@ -38,7 +38,7 @@ def ball_segmentation(image_path):
         if prop.area >= 200:  # Minimum ball size
             clean_mask[labeled_mask == prop.label] = 255
             
-    return (clean_mask > 0).astype(np.uint8)
+    return clean_mask, img  # Return both the mask and original image
 
 def calculate_dsc(pred_mask, gt_mask):
     """Calculate Dice Similarity Coefficient."""
@@ -50,11 +50,42 @@ def calculate_dsc(pred_mask, gt_mask):
     
     return (2.0 * intersection) / union if union > 0 else 1.0 if intersection == 0 else 0.0
 
+def visualize_results(original, pred_mask, gt_mask, dsc, frame_num, save_path):
+    """Create visualization of results with original image, predictions, and ground truth."""
+    # Create overlay of prediction on original image
+    pred_overlay = original.copy()
+    pred_mask_rgb = np.zeros_like(original)
+    pred_mask_rgb[:,:,1] = pred_mask * 255  # Green channel for predictions
+    pred_overlay = cv2.addWeighted(pred_overlay, 0.7, pred_mask_rgb, 0.3, 0)
+    
+    # Create overlay of ground truth on original image
+    gt_overlay = original.copy()
+    gt_mask_rgb = np.zeros_like(original)
+    gt_mask_rgb[:,:,0] = gt_mask * 255  # Red channel for ground truth
+    gt_overlay = cv2.addWeighted(gt_overlay, 0.7, gt_mask_rgb, 0.3, 0)
+    
+    # Combined visualization
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    axes[0].imshow(original)
+    axes[0].set_title("Original Image")
+    axes[0].axis('off')
+    
+    axes[1].imshow(pred_overlay)
+    axes[1].set_title(f"Prediction (DSC: {dsc:.4f})")
+    axes[1].axis('off')
+    
+    axes[2].imshow(gt_overlay)
+    axes[2].set_title("Ground Truth")
+    axes[2].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+
 def main():
     # Setup paths
     data_dir = "ball_frames"
     rgb_files = sorted(glob.glob(os.path.join(data_dir, "*[!_GT].png")))
-    mask_files = sorted(glob.glob(os.path.join(data_dir, "*_GT.png")))
     
     results = {}
     dsc_values = []
@@ -71,14 +102,16 @@ def main():
             continue
             
         # Process image and calculate DSC
-        pred_mask = ball_segmentation(rgb_path)
+        pred_mask, original_img = ball_segmentation(rgb_path)
         gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
         dsc = calculate_dsc(pred_mask, gt_mask)
         
         dsc_values.append(dsc)
         results[frame_num] = {
             'rgb_path': rgb_path,
+            'original_img': original_img,
             'pred_mask': pred_mask,
+            'gt_mask': gt_mask,
             'dsc': dsc
         }
         print(f"Frame {frame_num}: DSC = {dsc:.4f}")
@@ -88,8 +121,10 @@ def main():
     std_dsc = np.std(dsc_values)
     print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
     
-    # Create output directory
+    # Create output directories
     os.makedirs("results", exist_ok=True)
+    os.makedirs("results/best", exist_ok=True)
+    os.makedirs("results/worst", exist_ok=True)
     
     # Plot DSC bar chart
     plt.figure(figsize=(10, 6))
@@ -100,6 +135,7 @@ def main():
     plt.ylim(0, 1)
     plt.grid(axis='y', alpha=0.7)
     plt.savefig('results/dsc_plot.png', dpi=300)
+    plt.close()
     
     # Get best and worst frames
     frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
@@ -109,5 +145,52 @@ def main():
     print(f"Best frames: {best_frames}")
     print(f"Worst frames: {worst_frames}")
     
+    # Visualize best frames
+    for i, frame_num in enumerate(best_frames):
+        frame_data = results[frame_num]
+        save_path = f"results/best/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png"
+        visualize_results(
+            frame_data['original_img'],
+            frame_data['pred_mask'],
+            frame_data['gt_mask'],
+            frame_data['dsc'],
+            frame_num,
+            save_path
+        )
+    
+    # Visualize worst frames
+    for i, frame_num in enumerate(worst_frames):
+        frame_data = results[frame_num]
+        save_path = f"results/worst/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png"
+        visualize_results(
+            frame_data['original_img'],
+            frame_data['pred_mask'],
+            frame_data['gt_mask'],
+            frame_data['dsc'],
+            frame_num,
+            save_path
+        )
+    
+    # Create summary visualization of best and worst frames
+    plt.figure(figsize=(15, 10))
+    
+    # Plot best frames
+    for i, frame_num in enumerate(best_frames):
+        plt.subplot(2, 5, i+1)
+        plt.imshow(results[frame_num]['original_img'])
+        plt.title(f"Best #{i+1}: Frame {frame_num}\nDSC: {results[frame_num]['dsc']:.4f}")
+        plt.axis('off')
+    
+    # Plot worst frames
+    for i, frame_num in enumerate(worst_frames):
+        plt.subplot(2, 5, 5+i+1)
+        plt.imshow(results[frame_num]['original_img'])
+        plt.title(f"Worst #{i+1}: Frame {frame_num}\nDSC: {results[frame_num]['dsc']:.4f}")
+        plt.axis('off')
+    
+    plt.tight_layout()
+    plt.savefig('results/best_worst_summary.png', dpi=300)
+    plt.close()
+
 if __name__ == "__main__":
     main()
