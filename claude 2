@@ -5,6 +5,30 @@ import glob
 import matplotlib.pyplot as plt
 from skimage.measure import label, regionprops
 
+# Define path to extracted folder containing images
+extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"
+
+# Find all PNG files
+try:
+    all_files = glob.glob(os.path.join(extracted_folder, "*.png"))
+    if not all_files:
+        print(f"No PNG files found in {extracted_folder}. Please check the path.")
+        sys.exit(1)
+except Exception as e:
+    print(f"Error accessing directory: {e}")
+    sys.exit(1)
+
+# Separate RGB images and mask images
+rgb_images = sorted([f for f in all_files if "_GT" not in f])
+mask_images = sorted([f for f in all_files if "_GT" in f])
+
+print(f"Found {len(rgb_images)} RGB images and {len(mask_images)} mask images.")
+
+# Validate that we have matching pairs
+if len(rgb_images) == 0 or len(mask_images) == 0:
+    print("Error: Missing RGB images or mask images.")
+    sys.exit(1)
+
 def ball_segmentation(image_path):
     """Segment colored balls in an image using color-based thresholding."""
     img = cv2.imread(image_path)
