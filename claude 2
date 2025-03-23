@@ -1,0 +1,113 @@
+import cv2
+import numpy as np
+import os
+import glob
+import matplotlib.pyplot as plt
+from skimage.measure import label, regionprops
+
+def ball_segmentation(image_path):
+    """Segment colored balls in an image using color-based thresholding."""
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    
+    # Define color ranges for different balls
+    masks = [
+        cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255])),    # Red (low)
+        cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255])), # Red (high)
+        cv2.inRange(hsv, np.array([100, 100, 100]), np.array([140, 255, 255])), # Blue
+        cv2.inRange(hsv, np.array([40, 100, 100]), np.array([80, 255, 255])),   # Green
+        cv2.inRange(hsv, np.array([20, 100, 100]), np.array([35, 255, 255])),   # Yellow
+        cv2.inRange(hsv, np.array([10, 100, 100]), np.array([20, 255, 255])),   # Orange
+        cv2.inRange(hsv, np.array([140, 50, 100]), np.array([170, 255, 255]))   # Pink/purple
+    ]
+    
+    # Combine masks and apply morphological operations
+    combined_mask = np.zeros_like(masks[0])
+    for mask in masks:
+        combined_mask = combined_mask | mask
+        
+    kernel = np.ones((5, 5), np.uint8)
+    mask_cleaned = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+    mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel)
+    
+    # Remove small regions
+    labeled_mask = label(mask_cleaned)
+    clean_mask = np.zeros_like(mask_cleaned)
+    for prop in regionprops(labeled_mask):
+        if prop.area >= 200:  # Minimum ball size
+            clean_mask[labeled_mask == prop.label] = 255
+            
+    return (clean_mask > 0).astype(np.uint8)
+
+def calculate_dsc(pred_mask, gt_mask):
+    """Calculate Dice Similarity Coefficient."""
+    pred_mask = pred_mask > 0
+    gt_mask = gt_mask > 0
+    
+    intersection = np.logical_and(pred_mask, gt_mask).sum()
+    union = pred_mask.sum() + gt_mask.sum()
+    
+    return (2.0 * intersection) / union if union > 0 else 1.0 if intersection == 0 else 0.0
+
+def main():
+    # Setup paths
+    data_dir = "ball_frames"
+    rgb_files = sorted(glob.glob(os.path.join(data_dir, "*[!_GT].png")))
+    mask_files = sorted(glob.glob(os.path.join(data_dir, "*_GT.png")))
+    
+    results = {}
+    dsc_values = []
+    
+    # Process images
+    for rgb_path in rgb_files:
+        base_name = os.path.basename(rgb_path).split('.')[0]
+        frame_num = int(base_name.replace("frame-", ""))
+        
+        # Find corresponding ground truth
+        gt_path = os.path.join(data_dir, f"{base_name}_GT.png")
+        if not os.path.exists(gt_path):
+            print(f"No ground truth for frame {frame_num}")
+            continue
+            
+        # Process image and calculate DSC
+        pred_mask = ball_segmentation(rgb_path)
+        gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+        dsc = calculate_dsc(pred_mask, gt_mask)
+        
+        dsc_values.append(dsc)
+        results[frame_num] = {
+            'rgb_path': rgb_path,
+            'pred_mask': pred_mask,
+            'dsc': dsc
+        }
+        print(f"Frame {frame_num}: DSC = {dsc:.4f}")
+    
+    # Calculate statistics
+    mean_dsc = np.mean(dsc_values)
+    std_dsc = np.std(dsc_values)
+    print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
+    
+    # Create output directory
+    os.makedirs("results", exist_ok=True)
+    
+    # Plot DSC bar chart
+    plt.figure(figsize=(10, 6))
+    plt.bar(sorted(results.keys()), [results[k]['dsc'] for k in sorted(results.keys())])
+    plt.xlabel('Image Index')
+    plt.ylabel('DSC')
+    plt.title(f'Segmentation Results: Mean DSC = {mean_dsc:.4f} ± {std_dsc:.4f}')
+    plt.ylim(0, 1)
+    plt.grid(axis='y', alpha=0.7)
+    plt.savefig('results/dsc_plot.png', dpi=300)
+    
+    # Get best and worst frames
+    frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
+    worst_frames = frames_by_dsc[:5]
+    best_frames = frames_by_dsc[-5:]
+    
+    print(f"Best frames: {best_frames}")
+    print(f"Worst frames: {worst_frames}")
+    
+if __name__ == "__main__":
+    main()
