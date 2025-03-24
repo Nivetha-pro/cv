@@ -1,108 +1,131 @@
-import os
 import cv2
 import numpy as np
+import os
+import glob
 import matplotlib.pyplot as plt
-import zipfile
+from skimage.measure import label, regionprops
 
-def unzip_ball_frames(zip_path, extract_to):
-    if not os.path.exists(zip_path):
-        raise FileNotFoundError(f"Error: The file '{zip_path}' was not found. Please check the path and try again.")
-    
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_to)
+# Define paths (ensure the path separators are consistent)
+extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"  # Adjust this path to the folder where ZIP is extracted
 
-def load_images(image_folder, mask_folder):
-    if not os.path.exists(image_folder) or not os.path.exists(mask_folder):
-        raise FileNotFoundError("Error: Image or mask folder not found. Ensure the zip file is extracted correctly.")
+# Function to perform automated ball segmentation
+def ball_segmentation(image_path):
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
     
-    images = sorted([os.path.join(image_folder, f) for f in os.listdir(image_folder) if f.endswith(".png")])
-    masks = sorted([os.path.join(mask_folder, f) for f in os.listdir(mask_folder) if f.endswith(".png")])
+    # Color ranges for different balls
+    masks = [
+        cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255])),    # Red (low)
+        cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255])), # Red (high)
+        cv2.inRange(hsv, np.array([100, 100, 100]), np.array([140, 255, 255])), # Blue
+        cv2.inRange(hsv, np.array([40, 100, 100]), np.array([80, 255, 255])),   # Green
+        cv2.inRange(hsv, np.array([20, 100, 100]), np.array([35, 255, 255])),   # Yellow
+        cv2.inRange(hsv, np.array([10, 100, 100]), np.array([20, 255, 255])),   # Orange
+        cv2.inRange(hsv, np.array([140, 50, 100]), np.array([170, 255, 255]))   # Pink/purple
+    ]
     
-    if not images or not masks:
-        raise ValueError("Error: No images or masks found in the specified directories.")
-    
-    return images, masks
-
-def segment_ball(image_path):
-    image = cv2.imread(image_path)
-    if image is None:
-        raise FileNotFoundError(f"Error: Unable to read image {image_path}")
-    
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Combine and clean mask
+    combined_mask = np.zeros_like(masks[0])
+    for mask in masks:
+        combined_mask = combined_mask | mask
+        
     kernel = np.ones((5, 5), np.uint8)
-    morphed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    return morphed
-
-def dice_similarity(mask1, mask2):
-    intersection = np.logical_and(mask1, mask2).sum()
-    return (2. * intersection) / (mask1.sum() + mask2.sum())
-
-def evaluate_segmentation(image_folder, mask_folder):
-    images, masks = load_images(image_folder, mask_folder)
-    dsc_scores = []
-    results = []
+    mask_cleaned = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+    mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel)
     
-    for img_path, mask_path in zip(images, masks):
-        segmented = segment_ball(img_path)
-        ground_truth = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-        if ground_truth is None:
-            raise FileNotFoundError(f"Error: Unable to read mask {mask_path}")
+    # Remove small regions based on area
+    labeled_mask = label(mask_cleaned)
+    clean_mask = np.zeros_like(mask_cleaned)
+    for prop in regionprops(labeled_mask):
+        if prop.area >= 200:  # Minimum size for the ball
+            clean_mask[labeled_mask == prop.label] = 255
+            
+    return clean_mask, img
+
+# Function to calculate Dice Similarity Score (DSC)
+def calculate_dsc(pred_mask, gt_mask):
+    pred_mask = pred_mask > 0
+    gt_mask = gt_mask > 0
+    
+    intersection = np.logical_and(pred_mask, gt_mask).sum()
+    union = pred_mask.sum() + gt_mask.sum()
+    
+    return (2.0 * intersection) / union if union > 0 else 1.0 if intersection == 0 else 0.0
+
+def main():
+    # Find all image files
+    rgb_files = sorted(glob.glob(os.path.join(extracted_folder, "*[!_GT].png")))
+    
+    results = {}
+    dsc_values = []
+    frame_numbers = []  # To store the frame numbers for the x-axis
+    
+    # Process each image
+    for rgb_path in rgb_files:
+        base_name = os.path.basename(rgb_path).split('.')[0]
+        frame_num = int(base_name.replace("frame-", ""))
         
-        ground_truth = (ground_truth > 127).astype(np.uint8)
-        segmented = (segmented > 127).astype(np.uint8)
-        dsc = dice_similarity(segmented, ground_truth)
-        dsc_scores.append(dsc)
-        results.append((dsc, img_path, segmented, ground_truth))
-    
-    return dsc_scores, results
-
-def plot_results(dsc_scores):
-    plt.figure(figsize=(10, 5))
-    plt.bar(range(len(dsc_scores)), dsc_scores)
-    plt.xlabel("Image Index")
-    plt.ylabel("Dice Similarity Score")
-    plt.title("Segmentation Performance")
-    plt.show()
-
-def show_best_worst_results(results):
-    sorted_results = sorted(results, key=lambda x: x[0])
-    worst_results = sorted_results[:5]
-    best_results = sorted_results[-5:]
-    
-    fig, axes = plt.subplots(5, 4, figsize=(12, 12))
-    
-    for i, (dsc, img_path, segmented, ground_truth) in enumerate(worst_results + best_results):
-        image = cv2.imread(img_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        gt_path = os.path.join(extracted_folder, f"{base_name}_GT.png")
+        if not os.path.exists(gt_path):
+            print(f"No ground truth for frame {frame_num}")
+            continue
+            
+        # Segment the ball and read ground truth mask
+        pred_mask, original_img = ball_segmentation(rgb_path)
+        gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+        gt_mask_binary = (gt_mask > 0).astype(np.uint8) * 255
         
-        axes[i, 0].imshow(image)
-        axes[i, 0].set_title(f"Original Image {i+1}")
-        axes[i, 1].imshow(ground_truth, cmap='gray')
-        axes[i, 1].set_title(f"Ground Truth {i+1}")
-        axes[i, 2].imshow(segmented, cmap='gray')
-        axes[i, 2].set_title(f"Segmented {i+1}")
-        axes[i, 3].text(0.5, 0.5, f"DSC: {dsc:.4f}", ha='center', va='center', fontsize=12)
-        axes[i, 3].axis('off')
+        # Calculate DSC for the frame
+        dsc = calculate_dsc(pred_mask, gt_mask_binary)
+        dsc_values.append(dsc)
+        frame_numbers.append(frame_num)  # Collecting frame numbers
+        results[frame_num] = {
+            'original_img': original_img,
+            'pred_mask': pred_mask,
+            'gt_mask': gt_mask_binary,
+            'dsc': dsc
+        }
+        print(f"Frame {frame_num}: DSC = {dsc:.4f}")
     
-    plt.tight_layout()
-    plt.show()
+    # Calculate and display statistics (mean and standard deviation of DSC)
+    mean_dsc = np.mean(dsc_values)
+    std_dsc = np.std(dsc_values)
+    print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
+    
+    # Get the best and worst frames based on DSC values
+    frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
+    worst_frames = frames_by_dsc[:5]  # 5 frames with worst DSC
+    best_frames = frames_by_dsc[-5:]  # 5 frames with best DSC
+    
+    # Visualize and display the best and worst results
+    for frame_num in best_frames + worst_frames:
+        frame_data = results[frame_num]
+        title = f"Frame {frame_num} - DSC: {frame_data['dsc']:.4f}"
+        
+        # Create the figure with 3 subplots (original, prediction, ground truth)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # Original image
+        axes[0].imshow(frame_data['original_img'])
+        axes[0].set_title(f"Original\n{title}")
+        axes[0].axis('off')
+        
+        # Predicted mask (segmentation output)
+        pred_overlay = frame_data['pred_mask']
+        axes[1].imshow(pred_overlay, cmap='gray')
+        axes[1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
+        axes[1].axis('off')
+        
+        # Ground truth mask
+        gt_overlay = frame_data['gt_mask']
+        axes[2].imshow(gt_overlay, cmap='gray')
+        axes[2].set_title("Ground Truth")
+        axes[2].axis('off')
+        
+        # Adjust layout and display
+        plt.tight_layout()
+        plt.show()
 
 if __name__ == "__main__":
-    zip_path = "ball_frames.zip"  # Ensure this file exists in the current directory
-    extract_to = "ball_frames"  # Directory to extract files
-    
-    try:
-        unzip_ball_frames(zip_path, extract_to)
-        
-        image_folder = os.path.join(extract_to, "RGB")  # Adjust based on extracted folder structure
-        mask_folder = os.path.join(extract_to, "Masks")
-        
-        dsc_scores, results = evaluate_segmentation(image_folder, mask_folder)
-        print(f"Mean DSC: {np.mean(dsc_scores):.4f}, Std DSC: {np.std(dsc_scores):.4f}")
-        plot_results(dsc_scores)
-        show_best_worst_results(results)
-    except (FileNotFoundError, ValueError) as e:
-        print(e)
-
+    main()
