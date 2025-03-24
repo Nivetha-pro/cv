@@ -98,17 +98,19 @@ def main():
     worst_frames = frames_by_dsc[:5]  # 5 frames with worst DSC
     best_frames = frames_by_dsc[-5:]  # 5 frames with best DSC
     
-    # Display the best images
+    # Display the best images with title "5 Best Images"
     fig_best, axes_best = plt.subplots(5, 3, figsize=(15, 20))  # 5 rows for best images and 3 columns (Original, Predicted, GT)
+    fig_best.suptitle("5 Best Images", fontsize=16)
+    
     for i, frame_num in enumerate(best_frames):
         frame_data = results[frame_num]
         
-        # Display original image
+        # Display original image with frame number in title
         axes_best[i, 0].imshow(frame_data['original_img'])
-        axes_best[i, 0].set_title(f"Frame {frame_num}\nOriginal")
+        axes_best[i, 0].set_title(f"Frame {frame_num} - Original")
         axes_best[i, 0].axis('off')
         
-        # Display predicted mask (segmentation output)
+        # Display predicted mask (segmentation output) with DSC in title
         axes_best[i, 1].imshow(frame_data['pred_mask'], cmap='gray')
         axes_best[i, 1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
         axes_best[i, 1].axis('off')
@@ -121,17 +123,19 @@ def main():
     plt.tight_layout()
     plt.show()
 
-    # Display the worst images
+    # Display the worst images with title "5 Worst Images"
     fig_worst, axes_worst = plt.subplots(5, 3, figsize=(15, 20))  # 5 rows for worst images and 3 columns (Original, Predicted, GT)
+    fig_worst.suptitle("5 Worst Images", fontsize=16)
+    
     for i, frame_num in enumerate(worst_frames):
         frame_data = results[frame_num]
         
-        # Display original image
+        # Display original image with frame number in title
         axes_worst[i, 0].imshow(frame_data['original_img'])
-        axes_worst[i, 0].set_title(f"Frame {frame_num}\nOriginal")
+        axes_worst[i, 0].set_title(f"Frame {frame_num} - Original")
         axes_worst[i, 0].axis('off')
         
-        # Display predicted mask (segmentation output)
+        # Display predicted mask (segmentation output) with DSC in title
         axes_worst[i, 1].imshow(frame_data['pred_mask'], cmap='gray')
         axes_worst[i, 1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
         axes_worst[i, 1].axis('off')
