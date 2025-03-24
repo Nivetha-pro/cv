@@ -6,15 +6,19 @@ import matplotlib.pyplot as plt
 from skimage.measure import label, regionprops
 
 # Define paths (ensure the path separators are consistent)
+data_path = r"C:\Users\Student\Desktop\New folder\ball_frames.zip"
 extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"  # Adjust this path to the folder where ZIP is extracted
 
-# Function to perform automated ball segmentation
+# Function to perform automated ball segmentation based on color in HSV space
 def ball_segmentation(image_path):
+    # Read the image and convert it to RGB
     img = cv2.imread(image_path)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    # Convert to HSV color space for better color segmentation
     hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
     
-    # Color ranges for different balls
+    # Color ranges for different balls (in HSV format)
     masks = [
         cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255])),    # Red (low)
         cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255])), # Red (high)
@@ -22,26 +26,36 @@ def ball_segmentation(image_path):
         cv2.inRange(hsv, np.array([40, 100, 100]), np.array([80, 255, 255])),   # Green
         cv2.inRange(hsv, np.array([20, 100, 100]), np.array([35, 255, 255])),   # Yellow
         cv2.inRange(hsv, np.array([10, 100, 100]), np.array([20, 255, 255])),   # Orange
-        cv2.inRange(hsv, np.array([140, 50, 100]), np.array([170, 255, 255]))   # Pink/purple
+        cv2.inRange(hsv, np.array([140, 50, 100]), np.array([170, 255, 255])),  # Pink/Purple
+        # Adding a range for light (white) balls
+        cv2.inRange(hsv, np.array([0, 0, 180]), np.array([180, 30, 255]))      # White/Light Ball
     ]
     
-    # Combine and clean mask
+    # Combine all masks to identify all colors
     combined_mask = np.zeros_like(masks[0])
     for mask in masks:
         combined_mask = combined_mask | mask
         
-    kernel = np.ones((5, 5), np.uint8)
-    mask_cleaned = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-    mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel)
+    # Morphological operations to clean up the mask (remove noise)
+    kernel = np.ones((9, 9), np.uint8)  # Larger kernel for better cleaning
+    mask_cleaned = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)  # Remove small noise
+    mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel) # Fill holes in the mask
     
-    # Remove small regions based on area
+    # Label connected components
     labeled_mask = label(mask_cleaned)
     clean_mask = np.zeros_like(mask_cleaned)
+    
     for prop in regionprops(labeled_mask):
-        if prop.area >= 200:  # Minimum size for the ball
-            clean_mask[labeled_mask == prop.label] = 255
-            
-    return clean_mask, img
+        # Filter based on size and shape (circularity/area)
+        if prop.area >= 100:  # Reduced the area threshold to 100
+            # Calculate the aspect ratio or circularity
+            perimeter = prop.perimeter
+            if perimeter > 0:  # Avoid division by zero
+                circularity = 4 * np.pi * prop.area / (perimeter ** 2)
+                if circularity > 0.6:  # Adjusted circularity threshold to 0.6
+                    clean_mask[labeled_mask == prop.label] = 255
+
+    return clean_mask, img, labeled_mask
 
 # Function to calculate Dice Similarity Score (DSC)
 def calculate_dsc(pred_mask, gt_mask):
@@ -53,6 +67,38 @@ def calculate_dsc(pred_mask, gt_mask):
     
     return (2.0 * intersection) / union if union > 0 else 1.0 if intersection == 0 else 0.0
 
+# Visualize the segmentation results and identified balls
+def show_segmentation_result(original_img, pred_mask, gt_mask, labeled_mask, show_balls=True):
+    # Show the original image, predicted mask, and ground truth mask
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    axes[0].imshow(original_img)
+    axes[0].set_title("Original Image")
+    axes[0].axis('off')
+    
+    # Optionally mark balls on the original image
+    if show_balls:
+        # Draw contours around the identified balls
+        contours, _ = cv2.findContours(pred_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            if cv2.contourArea(contour) > 200:  # Filter small contours
+                cv2.drawContours(original_img, [contour], -1, (255, 0, 0), 3)  # Draw red contours
+
+    axes[0].imshow(original_img)
+    axes[0].set_title("Original Image with Balls Identified")
+    axes[0].axis('off')
+    
+    axes[1].imshow(pred_mask, cmap='gray')
+    axes[1].set_title("Predicted Mask")
+    axes[1].axis('off')
+    
+    axes[2].imshow(gt_mask, cmap='gray')
+    axes[2].set_title("Ground Truth")
+    axes[2].axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+
 def main():
     # Find all image files
     rgb_files = sorted(glob.glob(os.path.join(extracted_folder, "*[!_GT].png")))
@@ -60,6 +106,8 @@ def main():
     results = {}
     dsc_values = []
     frame_numbers = []  # To store the frame numbers for the x-axis
+    target_dsc = 0.75  # Target DSC of 75%
+    achieved_target = False  # Flag to track if the target is met
     
     # Process each image
     for rgb_path in rgb_files:
@@ -72,7 +120,7 @@ def main():
             continue
             
         # Segment the ball and read ground truth mask
-        pred_mask, original_img = ball_segmentation(rgb_path)
+        pred_mask, original_img, labeled_mask = ball_segmentation(rgb_path)
         gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
         gt_mask_binary = (gt_mask > 0).astype(np.uint8) * 255
         
@@ -87,18 +135,27 @@ def main():
             'dsc': dsc
         }
         print(f"Frame {frame_num}: DSC = {dsc:.4f}")
+        
+        # Check if we meet the target DSC of 75%
+        if dsc >= target_dsc:
+            achieved_target = True
     
     # Calculate and display statistics (mean and standard deviation of DSC)
     mean_dsc = np.mean(dsc_values)
     std_dsc = np.std(dsc_values)
     print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
     
-    # Get the best and worst frames based on DSC values
+    if mean_dsc >= target_dsc:
+        print(f"Achieved target DSC of {target_dsc*100}%!")
+    else:
+        print(f"Did not achieve target DSC of {target_dsc*100}%.")
+    
+    # Display the best and worst results
     frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
     worst_frames = frames_by_dsc[:5]  # 5 frames with worst DSC
     best_frames = frames_by_dsc[-5:]  # 5 frames with best DSC
     
-    # Display the best images with title "5 Best Images"
+    # Show the best images with title "5 Best Images"
     fig_best, axes_best = plt.subplots(5, 3, figsize=(15, 20))  # 5 rows for best images and 3 columns (Original, Predicted, GT)
     fig_best.suptitle("5 Best Images", fontsize=16)
     
@@ -115,18 +172,15 @@ def main():
         axes_best[i, 1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
         axes_best[i, 1].axis('off')
         
-        # Display ground truth mask
+        # Display the ground truth mask with frame number
         axes_best[i, 2].imshow(frame_data['gt_mask'], cmap='gray')
         axes_best[i, 2].set_title("Ground Truth")
         axes_best[i, 2].axis('off')
-    
-    plt.tight_layout()
-    plt.show()
 
     # Display the worst images with title "5 Worst Images"
     fig_worst, axes_worst = plt.subplots(5, 3, figsize=(15, 20))  # 5 rows for worst images and 3 columns (Original, Predicted, GT)
     fig_worst.suptitle("5 Worst Images", fontsize=16)
-    
+
     for i, frame_num in enumerate(worst_frames):
         frame_data = results[frame_num]
         
@@ -140,11 +194,11 @@ def main():
         axes_worst[i, 1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
         axes_worst[i, 1].axis('off')
         
-        # Display ground truth mask
+        # Display the ground truth mask with frame number
         axes_worst[i, 2].imshow(frame_data['gt_mask'], cmap='gray')
         axes_worst[i, 2].set_title("Ground Truth")
         axes_worst[i, 2].axis('off')
-    
+
     plt.tight_layout()
     plt.show()
 
