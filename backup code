@@ -30,15 +30,19 @@ def enhanced_ball_segmentation(rgb_path):
         lab_img = cv2.merge((cl, a, b))
         enhanced_img = cv2.cvtColor(lab_img, cv2.COLOR_Lab2BGR)
 
+        gray_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
+        blurred_img = cv2.GaussianBlur(gray_img, (5, 5), 0)  # Apply Gaussian blur for noise reduction
+
+
         # Use a more specific color range (could be tweaked based on experiment)
         lower_color = np.array([0, 100, 100])   # Lower HSV bounds
-        upper_color = np.array([20, 255, 255])  # Upper HSV bounds
+        upper_color = np.array([30, 255, 255])  # Upper HSV bounds
         
         # Create a binary mask
         color_mask = cv2.inRange(hsv_img, lower_color, upper_color)
         
         # Morphological operations to remove noise and smooth the mask
-        kernel = np.ones((7, 7), np.uint8)
+        kernel = np.ones((5, 5), np.uint8)
         pred_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
         pred_mask = cv2.morphologyEx(pred_mask, cv2.MORPH_OPEN, kernel)
         
@@ -48,11 +52,11 @@ def enhanced_ball_segmentation(rgb_path):
         # Filter contours based on area (assuming the ball is a larger object)
         pred_mask_refined = np.zeros_like(pred_mask)
         for contour in contours:
-            if cv2.contourArea(contour) > 500:  # Threshold area based on ball size
+            if cv2.contourArea(contour) > 100:  # Threshold area based on ball size
                 cv2.drawContours(pred_mask_refined, [contour], -1, (255), thickness=cv2.FILLED)
         
         # Optional: Use circular Hough Transform to detect the ball shape
-        circles = cv2.HoughCircles(pred_mask_refined, cv2.HOUGH_GRADIENT, dp=1.2, minDist=50, param1=100, param2=30, minRadius=10, maxRadius=50)
+        circles = cv2.HoughCircles(pred_mask_refined, cv2.HOUGH_GRADIENT, dp=1.2, minDist=50, param1=100, param2=30, minRadius=1, maxRadius=60)
         if circles is not None:
             circles = np.uint16(np.around(circles))
             for circle in circles[0, :]:
