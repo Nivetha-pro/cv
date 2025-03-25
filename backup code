@@ -1,63 +1,16 @@
 import os
 import glob
-import zipfile
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-def extract_zip(data_path, extracted_folder):
-    """
-    Extract zip file to the specified folder
-    
-    Args:
-    data_path (str): Path to the zip file
-    extracted_folder (str): Destination folder for extraction
-    """
-    # Create extraction folder if it doesn't exist
-    os.makedirs(extracted_folder, exist_ok=True)
-    
-    # Extract the zip file
-    with zipfile.ZipFile(data_path, 'r') as zip_ref:
-        zip_ref.extractall(extracted_folder)
-    
-    print(f"Extracted contents of {data_path} to {extracted_folder}")
-
 def calculate_dsc(pred_mask, gt_mask):
-    """
-    Calculate Dice Similarity Coefficient (DSC)
-    
-    Args:
-    pred_mask (numpy.ndarray): Predicted binary mask
-    gt_mask (numpy.ndarray): Ground truth binary mask
-    
-    Returns:
-    float: Dice Similarity Coefficient
-    """
-    # Ensure masks are binary
-    pred_mask_binary = (pred_mask > 0).astype(np.uint8)
-    gt_mask_binary = (gt_mask > 0).astype(np.uint8)
-    
-    # Calculate intersection and union
-    intersection = np.sum(pred_mask_binary * gt_mask_binary)
-    total_pixels = np.sum(pred_mask_binary) + np.sum(gt_mask_binary)
-    
-    # Calculate DSC
-    if total_pixels == 0:
-        return 0.0  # If both masks are empty, return 0
-    
-    dsc = (2.0 * intersection) / total_pixels
-    return dsc
+    # Compute the Dice Similarity Coefficient (DSC)
+    intersection = np.sum(pred_mask & gt_mask)
+    union = np.sum(pred_mask) + np.sum(gt_mask)
+    return 2 * intersection / union if union != 0 else 1.0
 
-def ball_segmentation(rgb_path):
-    """
-    Perform ball segmentation on the input image
-    
-    Args:
-    rgb_path (str): Path to the RGB image
-    
-    Returns:
-    tuple: (predicted mask, original image, labeled mask)
-    """
+def enhanced_ball_segmentation(rgb_path):
     try:
         # Read the original image
         original_img = cv2.imread(rgb_path)
@@ -69,25 +22,50 @@ def ball_segmentation(rgb_path):
         # Convert to HSV color space
         hsv_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2HSV)
         
-        # Define color range for ball segmentation (adjust these values as needed)
+        # Apply CLAHE for better contrast
+        lab_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2Lab)
+        l, a, b = cv2.split(lab_img)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l)
+        lab_img = cv2.merge((cl, a, b))
+        enhanced_img = cv2.cvtColor(lab_img, cv2.COLOR_Lab2BGR)
+
+        # Use a more specific color range (could be tweaked based on experiment)
         lower_color = np.array([0, 100, 100])   # Lower HSV bounds
         upper_color = np.array([20, 255, 255])  # Upper HSV bounds
         
         # Create a binary mask
         color_mask = cv2.inRange(hsv_img, lower_color, upper_color)
         
-        # Optional: Apply morphological operations to clean up the mask
-        kernel = np.ones((5,5), np.uint8)
+        # Morphological operations to remove noise and smooth the mask
+        kernel = np.ones((7, 7), np.uint8)
         pred_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
         pred_mask = cv2.morphologyEx(pred_mask, cv2.MORPH_OPEN, kernel)
         
-        # Find connected components for labeling
-        num_labels, labeled_mask = cv2.connectedComponents(pred_mask)
+        # Find contours to refine the mask
+        contours, _ = cv2.findContours(pred_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        return pred_mask, original_img_rgb, labeled_mask
+        # Filter contours based on area (assuming the ball is a larger object)
+        pred_mask_refined = np.zeros_like(pred_mask)
+        for contour in contours:
+            if cv2.contourArea(contour) > 500:  # Threshold area based on ball size
+                cv2.drawContours(pred_mask_refined, [contour], -1, (255), thickness=cv2.FILLED)
+        
+        # Optional: Use circular Hough Transform to detect the ball shape
+        circles = cv2.HoughCircles(pred_mask_refined, cv2.HOUGH_GRADIENT, dp=1.2, minDist=50, param1=100, param2=30, minRadius=10, maxRadius=50)
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
+            for circle in circles[0, :]:
+                # Draw circle in the mask (optional)
+                cv2.circle(pred_mask_refined, (circle[0], circle[1]), circle[2], (255), 2)
+        
+        # Find connected components and label the mask
+        num_labels, labeled_mask = cv2.connectedComponents(pred_mask_refined)
+        
+        return pred_mask_refined, original_img_rgb, labeled_mask
     
     except Exception as e:
-        print(f"Error in ball_segmentation for {rgb_path}: {e}")
+        print(f"Error in enhanced_ball_segmentation for {rgb_path}: {e}")
         return None, None, None
 
 def main(extracted_folder):
@@ -118,7 +96,7 @@ def main(extracted_folder):
             continue
             
         # Segment the ball and read ground truth mask
-        pred_mask, original_img, labeled_mask = ball_segmentation(rgb_path)
+        pred_mask, original_img, labeled_mask = enhanced_ball_segmentation(rgb_path)
         
         if pred_mask is None or original_img is None:
             print(f"Segmentation failed for frame {frame_num}")
@@ -148,9 +126,11 @@ def main(extracted_folder):
         print("No valid DSC values computed. Check your input images and segmentation.")
         return
     
-    # Calculate and display mean DSC
+    # Calculate and display mean and standard deviation of DSC
     mean_dsc = np.mean(dsc_values)
+    std_dsc = np.std(dsc_values)
     print(f"Mean DSC: {mean_dsc:.4f}")
+    print(f"Standard Deviation of DSC: {std_dsc:.4f}")
     
     # Display results only if we have enough frames
     if len(results) >= 10:
@@ -214,14 +194,5 @@ def main(extracted_folder):
     else:
         print(f"Not enough frames to plot (found {len(results)} frames)")
 
-# Example usage
-if __name__ == "__main__":
-    # Define paths (ensure the path separators are consistent)
-    data_path = r"C:\Users\Student\Desktop\New folder\ball_frames.zip"
-    extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"
-    
-    # Extract zip file
-    extract_zip(data_path, extracted_folder)
-    
-    # Run main analysis
-    main(extracted_folder)
+# Call the main function with the path to your extracted folder
+main("C:/Users/Student/Desktop/New folder/ball_frames")
