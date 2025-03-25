@@ -37,7 +37,7 @@ def ball_segmentation(image_path):
         combined_mask = combined_mask | mask
         
     # Morphological operations to clean up the mask (remove noise)
-    kernel = np.ones((9, 9), np.uint8)  # Larger kernel for better cleaning
+    kernel = np.ones((7, 7), np.uint8)  # Larger kernel for better cleaning
     mask_cleaned = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)  # Remove small noise
     mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel) # Fill holes in the mask
     
@@ -106,8 +106,6 @@ def main():
     results = {}
     dsc_values = []
     frame_numbers = []  # To store the frame numbers for the x-axis
-    target_dsc = 0.75  # Target DSC of 75%
-    achieved_target = False  # Flag to track if the target is met
     
     # Process each image
     for rgb_path in rgb_files:
@@ -135,20 +133,10 @@ def main():
             'dsc': dsc
         }
         print(f"Frame {frame_num}: DSC = {dsc:.4f}")
-        
-        # Check if we meet the target DSC of 75%
-        if dsc >= target_dsc:
-            achieved_target = True
     
-    # Calculate and display statistics (mean and standard deviation of DSC)
+    # Calculate and display statistics (mean DSC)
     mean_dsc = np.mean(dsc_values)
-    std_dsc = np.std(dsc_values)
-    print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
-    
-    if mean_dsc >= target_dsc:
-        print(f"Achieved target DSC of {target_dsc*100}%!")
-    else:
-        print(f"Did not achieve target DSC of {target_dsc*100}%.")
+    print(f"Mean DSC: {mean_dsc:.4f}")
     
     # Display the best and worst results
     frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
@@ -198,6 +186,15 @@ def main():
         axes_worst[i, 2].imshow(frame_data['gt_mask'], cmap='gray')
         axes_worst[i, 2].set_title("Ground Truth")
         axes_worst[i, 2].axis('off')
+
+    # Display bar chart of DSC values
+    plt.figure(figsize=(10, 6))
+    plt.bar(frame_numbers, dsc_values, color='skyblue')
+    plt.xlabel('Image Number (Index)', fontsize=12)
+    plt.ylabel('Dice Similarity Coefficient (DSC)', fontsize=12)
+    plt.title('DSC Values for Each Image', fontsize=16)
+    plt.tight_layout()
+    plt.show()
 
     plt.tight_layout()
     plt.show()
