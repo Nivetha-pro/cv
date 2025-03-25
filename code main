@@ -77,7 +77,7 @@ def ball_segmentation(rgb_path):
         color_mask = cv2.inRange(hsv_img, lower_color, upper_color)
         
         # Optional: Apply morphological operations to clean up the mask
-        kernel = np.ones((5,5), np.uint8)
+        kernel = np.ones((7,7), np.uint8)
         pred_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
         pred_mask = cv2.morphologyEx(pred_mask, cv2.MORPH_OPEN, kernel)
         
