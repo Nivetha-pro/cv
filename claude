@@ -1,336 +1,156 @@
 import cv2
 import numpy as np
-import os
 import glob
+import os
 import matplotlib.pyplot as plt
-from skimage.measure import label, regionprops
-import sys
 
-# Define path to extracted folder containing images
-extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"
+# Define dataset path - update this to your new location
+image_folder = r"C:\Users\jaikr\OneDrive\Desktop\COMPUTER VISION\ball_frames"
 
-# Find all PNG files
-try:
-    all_files = glob.glob(os.path.join(extracted_folder, "*.png"))
-    if not all_files:
-        print(f"No PNG files found in {extracted_folder}. Please check the path.")
-        sys.exit(1)
-except Exception as e:
-    print(f"Error accessing directory: {e}")
-    sys.exit(1)
+# Get list of image files (without debug prints)
+rgb_images = sorted(glob.glob(os.path.join(image_folder, 'frame-*.png')))
+gt_images = sorted(glob.glob(os.path.join(image_folder, 'frame-*_GT.png')))
 
-# Separate RGB images and mask images
-rgb_images = sorted([f for f in all_files if "_GT" not in f])
-mask_images = sorted([f for f in all_files if "_GT" in f])
+# Filter out only RGB images (remove GT images from list)
+rgb_images = [img for img in rgb_images if '_GT' not in img]
 
-print(f"Found {len(rgb_images)} RGB images and {len(mask_images)} mask images.")
-
-# Validate that we have matching pairs
-if len(rgb_images) == 0 or len(mask_images) == 0:
-    print("Error: Missing RGB images or mask images.")
-    sys.exit(1)
-
-
-def ball_segmentation(image_path):
-    """Segment colored balls in an image using color-based thresholding."""
-    # Load image
-    img = cv2.imread(image_path)
-    if img is None:
-        print(f"Error: Could not read image {image_path}")
-        return np.zeros((100, 100), dtype=np.uint8)  # Return empty mask if image can't be read
+# Function to perform image segmentation
+def segment_ball(image_path):
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Error reading image: {image_path}")
+        return None
     
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-    
-    # Define color ranges for different balls
-    masks = []
-    # Red (two ranges because red wraps around in HSV)
-    masks.append(cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255])))
-    masks.append(cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255])))
-    # Blue
-    masks.append(cv2.inRange(hsv, np.array([100, 100, 100]), np.array([140, 255, 255])))
-    # Green
-    masks.append(cv2.inRange(hsv, np.array([40, 100, 100]), np.array([80, 255, 255])))
-    # Yellow
-    masks.append(cv2.inRange(hsv, np.array([20, 100, 100]), np.array([35, 255, 255])))
-    # Orange
-    masks.append(cv2.inRange(hsv, np.array([10, 100, 100]), np.array([20, 255, 255])))
-    # Pink/purple
-    masks.append(cv2.inRange(hsv, np.array([140, 50, 100]), np.array([170, 255, 255])))
-    
-    # Combine all masks
-    combined_mask = np.zeros_like(masks[0])
-    for mask in masks:
-        combined_mask = combined_mask | mask
-    
-    # Clean up the mask
+    # Apply Gaussian blur
+    blurred = cv2.GaussianBlur(image, (5, 5), 0)
+    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+
+    # Define HSV range for ball detection (adjustable)
+    lower_bound = np.array([20, 100, 100])
+    upper_bound = np.array([40, 255, 255])
+
+    # Create mask using color thresholding
+    mask = cv2.inRange(hsv, lower_bound, upper_bound)
+
+    # Apply morphological operations
     kernel = np.ones((5, 5), np.uint8)
-    mask_opened = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-    mask_closed = cv2.morphologyEx(mask_opened, cv2.MORPH_CLOSE, kernel)
-    
-    # Remove small noise regions
-    labeled_mask = label(mask_closed)
-    props = regionprops(labeled_mask)
-    
-    clean_mask = np.zeros_like(mask_closed)
-    min_area = 200  # Minimum area to be considered a ball
-    for prop in props:
-        if prop.area >= min_area:
-            clean_mask[labeled_mask == prop.label] = 255
-    
-    binary_mask = (clean_mask > 0).astype(np.uint8)
-    return binary_mask
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
+    return mask
 
-def calculate_dsc(pred_mask, gt_mask):
-    """Calculate Dice Similarity Coefficient."""
-    pred_mask = (pred_mask > 0).astype(np.uint8)
-    gt_mask = (gt_mask > 0).astype(np.uint8)
-    
-    intersection = np.logical_and(pred_mask, gt_mask).sum()
-    union = pred_mask.sum() + gt_mask.sum()
-    
-    # Avoid division by zero
-    if union == 0:
-        return 1.0 if intersection == 0 else 0.0
-    
-    dsc = (2. * intersection) / union
-    return dsc
+# Function to compute Dice Similarity Score (DSC)
+def dice_score(pred, gt):
+    intersection = np.sum(pred * gt)
+    return (2. * intersection) / (np.sum(pred) + np.sum(gt) + 1e-6)
 
+# Process all images and calculate DSC scores
+dsc_scores = []
+segmentation_results = []
 
-def parse_frame_number(filename):
-    """Extract frame number from filename."""
-    try:
-        base_name = os.path.basename(filename)
-        frame_part = base_name.replace("_GT", "").replace("frame-", "").replace(".png", "")
-        return int(frame_part)
-    except ValueError:
-        print(f"Warning: Could not parse frame number from {filename}")
-        return -1
+for rgb_path in rgb_images:
+    gt_path = rgb_path.replace('.png', '_GT.png')
+    
+    # Check if GT file exists
+    if not os.path.exists(gt_path):
+        print(f"Ground truth file not found: {gt_path}")
+        continue
+    
+    # Read ground-truth mask
+    gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+    if gt_mask is None:
+        print(f"Error reading ground truth mask: {gt_path}")
+        continue
+    _, gt_mask = cv2.threshold(gt_mask, 127, 1, cv2.THRESH_BINARY)
 
+    # Perform segmentation
+    pred_mask = segment_ball(rgb_path)
+    if pred_mask is None:
+        continue
+    _, pred_mask = cv2.threshold(pred_mask, 127, 1, cv2.THRESH_BINARY)
 
-def save_visualizations(results, mean_dsc, std_dsc, best_frames, worst_frames):
-    """Save visualizations to disk."""
-    output_dir = os.path.join(os.path.dirname(extracted_folder), "results")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Save DSC bar chart
-    plt.figure(figsize=(14, 8))
-    image_indices = sorted(results.keys())
-    dsc_values = [results[idx]['dsc'] for idx in image_indices]
-    
-    plt.bar(image_indices, dsc_values, color='skyblue', edgecolor='navy')
-    plt.xlabel('Image Number (Index)', fontsize=12)
-    plt.ylabel('Dice Similarity Coefficient (DSC)', fontsize=12)
-    plt.title(f'Segmentation Performance\nMean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}', fontsize=14)
-    plt.ylim(0, 1)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'dsc_results.png'), dpi=300)
-    plt.close()
-    
-    # Save best and worst results
-    fig = plt.figure(figsize=(20, 24))
-    plt.suptitle('Appendix: Five Best and Five Worst Results', fontsize=20)
-    
-    # Plot best results
-    for i, frame_num in enumerate(best_frames):
-        result = results[frame_num]
-        rgb = cv2.imread(result['rgb_path'])
-        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-        
-        # Original image
-        ax1 = plt.subplot(5, 4, i*2+1)
-        ax1.imshow(rgb)
-        ax1.set_title(f'Best #{i+1}: Frame {frame_num}', fontsize=12)
-        ax1.axis('off')
-        
-        # Overlay
-        ax2 = plt.subplot(5, 4, i*2+2)
-        ax2.imshow(rgb)
-        mask_rgb = np.zeros_like(rgb)
-        mask_rgb[:,:,1] = result['pred_mask'] * 255  # Green channel
-        ax2.imshow(mask_rgb, alpha=0.5)
-        ax2.set_title(f'DSC: {result["dsc"]:.4f}', fontsize=12)
-        ax2.axis('off')
-    
-    # Plot worst results
-    for i, frame_num in enumerate(worst_frames):
-        result = results[frame_num]
-        rgb = cv2.imread(result['rgb_path'])
-        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-        
-        # Original image
-        ax1 = plt.subplot(5, 4, (i+5)*2+1)
-        ax1.imshow(rgb)
-        ax1.set_title(f'Worst #{i+1}: Frame {frame_num}', fontsize=12)
-        ax1.axis('off')
-        
-        # Overlay
-        ax2 = plt.subplot(5, 4, (i+5)*2+2)
-        ax2.imshow(rgb)
-        mask_rgb = np.zeros_like(rgb)
-        mask_rgb[:,:,1] = result['pred_mask'] * 255  # Green channel
-        ax2.imshow(mask_rgb, alpha=0.5)
-        ax2.set_title(f'DSC: {result["dsc"]:.4f}', fontsize=12)
-        ax2.axis('off')
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
-    plt.savefig(os.path.join(output_dir, 'best_worst_results.png'), dpi=300)
-    plt.close()
-    
-    print(f"Visualizations saved to {output_dir}")
+    # Compute DSC score
+    dsc = dice_score(pred_mask, gt_mask)
+    dsc_scores.append(dsc)
 
+    # Store results for visualization
+    segmentation_results.append((rgb_path, dsc, pred_mask, gt_mask))
 
-def process_images_and_display_results():
-    dsc_values = []
-    results = {}
-    
-    # Match RGB images with their GT masks
-    for rgb_path in rgb_images:
-        frame_num = parse_frame_number(rgb_path)
-        if frame_num < 0:
-            continue
-            
-        # Find corresponding GT mask
-        gt_path = None
-        for mask_path in mask_images:
-            if parse_frame_number(mask_path) == frame_num:
-                gt_path = mask_path
-                break
-        
-        if gt_path is None:
-            print(f"Warning: No ground truth found for frame {frame_num}")
-            continue
-        
-        try:
-            # Process image
-            pred_mask = ball_segmentation(rgb_path)
-            gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
-            
-            if gt_mask is None:
-                print(f"Error: Could not read ground truth mask {gt_path}")
-                continue
-                
-            gt_mask = (gt_mask > 0).astype(np.uint8)
-            
-            # Calculate DSC
-            dsc = calculate_dsc(pred_mask, gt_mask)
-            dsc_values.append(dsc)
-            
-            # Store results
-            results[frame_num] = {
-                'rgb_path': rgb_path,
-                'pred_mask': pred_mask,
-                'gt_mask': gt_mask,
-                'dsc': dsc
-            }
-            
-            print(f"Processed frame {frame_num}: DSC = {dsc:.4f}")
-        
-        except Exception as e:
-            print(f"Error processing frame {frame_num}: {e}")
-    
-    if not results:
-        print("No results to display. Check error messages above.")
+# Compute mean and standard deviation of DSC scores
+if dsc_scores:
+    mean_dsc = np.mean(dsc_scores)
+    std_dsc = np.std(dsc_scores)
+    print(f'Mean DSC Score: {mean_dsc:.4f}, Standard Deviation: {std_dsc:.4f}')
+else:
+    print("No valid DSC scores computed. Check your dataset path and file naming.")
+
+# Sort results to get best and worst cases
+if segmentation_results:
+    segmentation_results.sort(key=lambda x: x[1])  # Sort by DSC score (ascending)
+    worst_cases = segmentation_results[:min(5, len(segmentation_results))]  # Bottom 5 worst cases (or fewer)
+    best_cases = segmentation_results[-min(5, len(segmentation_results)):]  # Top 5 best cases (or fewer)
+else:
+    worst_cases = []
+    best_cases = []
+    print("No segmentation results to display. Check your dataset path and file naming.")
+
+# Function to plot segmentation results
+def plot_results(cases, title):
+    if len(cases) == 0:
+        print(f"No cases to plot for: {title}")
         return
+        
+    fig, axes = plt.subplots(len(cases), 3, figsize=(10, 10))
+    fig.suptitle(title, fontsize=14)
     
-    # Calculate statistics
-    mean_dsc = np.mean(dsc_values)
-    std_dsc = np.std(dsc_values)
-    print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
-    
-    # Find best and worst frames
-    frame_dsc_pairs = [(idx, results[idx]['dsc']) for idx in results.keys()]
-    frame_dsc_pairs.sort(key=lambda x: x[1])
-    
-    # Get up to 5 worst frames (or as many as available)
-    num_worst = min(5, len(frame_dsc_pairs))
-    worst_frames = [pair[0] for pair in frame_dsc_pairs[:num_worst]]
-    
-    # Get up to 5 best frames (or as many as available)
-    num_best = min(5, len(frame_dsc_pairs))
-    best_frames = [pair[0] for pair in frame_dsc_pairs[-num_best:]]
-    best_frames.reverse()  # Show highest DSC first
-    
-    print("Best frames:", best_frames)
-    print("Worst frames:", worst_frames)
-    
-    # Create bar chart of DSC values
-    plt.figure(figsize=(14, 8))
-    image_indices = sorted(results.keys())
-    dsc_values = [results[idx]['dsc'] for idx in image_indices]
-    
-    plt.bar(image_indices, dsc_values, color='skyblue', edgecolor='navy')
-    plt.xlabel('Image Number (Index)', fontsize=12)
-    plt.ylabel('Dice Similarity Coefficient (DSC)', fontsize=12)
-    plt.title(f'Segmentation Performance\nMean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}', fontsize=14)
-    plt.ylim(0, 1)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    # If there's only one case, axes won't be a 2D array
+    if len(cases) == 1:
+        axes = np.array([axes])
+        
+    for i, (img_path, dsc, pred_mask, gt_mask) in enumerate(cases):
+        rgb_img = cv2.imread(img_path)
+        rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
+
+        # Plot original image
+        axes[i, 0].imshow(rgb_img)
+        axes[i, 0].set_title(f"Original {os.path.basename(img_path)}")
+        axes[i, 0].axis("off")
+
+        # Plot predicted mask
+        axes[i, 1].imshow(pred_mask, cmap="gray")
+        axes[i, 1].set_title(f"Predicted Mask (DSC={dsc:.2f})")
+        axes[i, 1].axis("off")
+
+        # Plot ground-truth mask
+        axes[i, 2].imshow(gt_mask, cmap="gray")
+        axes[i, 2].set_title("Ground Truth Mask")
+        axes[i, 2].axis("off")
+
     plt.tight_layout()
+    plt.subplots_adjust(top=0.9)  # Adjust the top to make room for the title
     plt.show()
-    
-    # Display appendix of best and worst results
-    fig = plt.figure(figsize=(20, 24))
-    plt.suptitle('Appendix: Five Best and Five Worst Results', fontsize=20)
-    
-    # Plot best results
-    for i, frame_num in enumerate(best_frames):
-        result = results[frame_num]
-        rgb = cv2.imread(result['rgb_path'])
-        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+
+# Bar chart to display DSC values
+def plot_dsc_bar_chart(dsc_scores):
+    if not dsc_scores:
+        print("No DSC scores to plot.")
+        return
         
-        # Original image
-        ax1 = plt.subplot(5, 4, i*2+1)
-        ax1.imshow(rgb)
-        ax1.set_title(f'Best #{i+1}: Frame {frame_num}', fontsize=12)
-        ax1.axis('off')
-        
-        # Overlay
-        ax2 = plt.subplot(5, 4, i*2+2)
-        ax2.imshow(rgb)
-        mask_rgb = np.zeros_like(rgb)
-        mask_rgb[:,:,1] = result['pred_mask'] * 255  # Green channel
-        ax2.imshow(mask_rgb, alpha=0.5)
-        ax2.set_title(f'DSC: {result["dsc"]:.4f}', fontsize=12)
-        ax2.axis('off')
-    
-    # Plot worst results
-    for i, frame_num in enumerate(worst_frames):
-        result = results[frame_num]
-        rgb = cv2.imread(result['rgb_path'])
-        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-        
-        # Original image
-        ax1 = plt.subplot(5, 4, (i+5)*2+1)
-        ax1.imshow(rgb)
-        ax1.set_title(f'Worst #{i+1}: Frame {frame_num}', fontsize=12)
-        ax1.axis('off')
-        
-        # Overlay
-        ax2 = plt.subplot(5, 4, (i+5)*2+2)
-        ax2.imshow(rgb)
-        mask_rgb = np.zeros_like(rgb)
-        mask_rgb[:,:,1] = result['pred_mask'] * 255  # Green channel
-        ax2.imshow(mask_rgb, alpha=0.5)
-        ax2.set_title(f'DSC: {result["dsc"]:.4f}', fontsize=12)
-        ax2.axis('off')
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.figure(figsize=(10, 6))
+    plt.bar(range(len(dsc_scores)), dsc_scores, color='skyblue')
+    plt.xlabel('Image Index', fontsize=12)
+    plt.ylabel('Dice Similarity Score (DSC)', fontsize=12)
+    plt.title('DSC Scores for Each Image', fontsize=14)
+    plt.xticks(range(len(dsc_scores)), [f'Image {i+1}' for i in range(len(dsc_scores))], rotation=90)
+    plt.ylim(0, 1)  # DSC score ranges from 0 to 1
+    plt.grid(axis='y')
     plt.show()
+
+# Display best and worst segmentation results
+if segmentation_results:
+    plot_results(best_cases, "Best Segmentation Results")
+    plot_results(worst_cases, "Worst Segmentation Results")
     
-    # Save visualizations
-    save_visualizations(results, mean_dsc, std_dsc, best_frames, worst_frames)
-
-
-# Main execution
-if __name__ == "__main__":
-    try:
-        if rgb_images and mask_images:
-            process_images_and_display_results()
-        else:
-            print("Cannot proceed - no images found.")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        import traceback
-        traceback.print_exc()
+    # Only plot the bar chart if there are scores
+    if dsc_scores:
+        plot_dsc_bar_chart(dsc_scores)
