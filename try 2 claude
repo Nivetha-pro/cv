@@ -1,141 +1,127 @@
-import os
-import glob
-import zipfile
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
+function ball_segmentation_main()
+    % Define paths
+    dataPath = 'C:\Users\Student\Desktop\New folder\ball_frames.zip';
+    extractedFolder = 'C:\Users\Student\Desktop\New folder\ball_frames';
+    
+    % Extract the zip file
+    extractZip(dataPath, extractedFolder);
+    
+    % Process the images
+    processImages(extractedFolder);
+end
 
-def extract_zip(data_path, extracted_folder):
-    os.makedirs(extracted_folder, exist_ok=True)
-    with zipfile.ZipFile(data_path, 'r') as zip_ref:
-        zip_ref.extractall(extracted_folder)
-    print(f"Extracted contents of {data_path} to {extracted_folder}")
+function extractZip(zipPath, outputFolder)
+    % Extract zip file to the specified folder
+    if ~exist(outputFolder, 'dir')
+        mkdir(outputFolder);
+    end
+    unzip(zipPath, outputFolder);
+    fprintf('Extracted contents of %s to %s\n', zipPath, outputFolder);
+end
 
-def calculate_dsc(pred_mask, gt_mask):
-    pred_mask_binary = (pred_mask > 0).astype(np.uint8)
-    gt_mask_binary = (gt_mask > 0).astype(np.uint8)
+function dsc = calculateDSC(predMask, gtMask)
+    % Calculate Dice Similarity Coefficient (DSC)
+    predMaskBinary = predMask > 0;
+    gtMaskBinary = gtMask > 0;
     
-    intersection = np.sum(pred_mask_binary * gt_mask_binary)
-    total_pixels = np.sum(pred_mask_binary) + np.sum(gt_mask_binary)
+    intersection = sum(predMaskBinary(:) & gtMaskBinary(:));
+    totalPixels = sum(predMaskBinary(:)) + sum(gtMaskBinary(:));
     
-    return (2.0 * intersection) / total_pixels if total_pixels > 0 else 0.0
+    if totalPixels == 0
+        dsc = 0.0;
+    else
+        dsc = (2 * intersection) / totalPixels;
+    end
+end
 
-def ball_segmentation(rgb_path):
-    try:
-        original_img = cv2.imread(rgb_path)
-        if original_img is None:
-            raise ValueError(f"Could not read image: {rgb_path}")
+function [predMask, originalImg, labeledMask] = segmentBall(imagePath)
+    try
+        % Read the original image
+        originalImg = imread(imagePath);
+        hsvImg = rgb2hsv(originalImg);
         
-        original_img_rgb = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
-        hsv_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2HSV)
+        % Define HSV threshold values (adjust if necessary)
+        lowerColor = [0, 0.4, 0.4];
+        upperColor = [0.1, 1, 1];
         
-        lower_color = np.array([0, 100, 100])
-        upper_color = np.array([20, 255, 255])
+        % Create a binary mask based on HSV values
+        mask = (hsvImg(:,:,1) >= lowerColor(1) & hsvImg(:,:,1) <= upperColor(1)) & ...
+               (hsvImg(:,:,2) >= lowerColor(2) & hsvImg(:,:,2) <= upperColor(2)) & ...
+               (hsvImg(:,:,3) >= lowerColor(3) & hsvImg(:,:,3) <= upperColor(3));
         
-        color_mask = cv2.inRange(hsv_img, lower_color, upper_color)
+        % Apply morphological operations
+        se = strel('disk', 7);
+        predMask = imclose(mask, se);
+        predMask = imopen(predMask, se);
         
-        kernel = np.ones((5,5), np.uint8)
-        pred_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
-        pred_mask = cv2.morphologyEx(pred_mask, cv2.MORPH_OPEN, kernel)
+        % Label connected components
+        labeledMask = bwlabel(predMask);
         
-        return pred_mask, original_img_rgb
-    
-    except Exception as e:
-        print(f"Error in ball_segmentation for {rgb_path}: {e}")
-        return None, None
+    catch ME
+        fprintf('Error processing image %s: %s\n', imagePath, ME.message);
+        predMask = [];
+        originalImg = [];
+        labeledMask = [];
+    end
+end
 
-def plot_results(results, dsc_values, frame_numbers):
-    frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
-    worst_frames = frames_by_dsc[:5]
-    best_frames = frames_by_dsc[-5:]
+function processImages(folder)
+    imageFiles = dir(fullfile(folder, '*[!_GT].png'));
+    if isempty(imageFiles)
+        fprintf('No RGB images found in %s\n', folder);
+        return;
+    end
     
-    # Combined plot for best and worst frames
-    fig, axes = plt.subplots(2, 15, figsize=(30, 10))
-    fig.suptitle("Image Segmentation Analysis", fontsize=16)
+    dscValues = [];
+    frameNumbers = [];
     
-    # Plot best and worst frames
-    for row, frame_set in [(0, best_frames), (1, worst_frames)]:
-        for i, frame_num in enumerate(frame_set):
-            frame_data = results[frame_num]
-            
-            # Original image
-            axes[row, i*3].imshow(frame_data['original_img'])
-            axes[row, i*3].set_title(f"Frame {frame_num} - Original")
-            axes[row, i*3].axis('off')
-            
-            # Predicted mask
-            axes[row, i*3+1].imshow(frame_data['pred_mask'], cmap='gray')
-            axes[row, i*3+1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
-            axes[row, i*3+1].axis('off')
-            
-            # Ground truth mask
-            axes[row, i*3+2].imshow(frame_data['gt_mask'], cmap='gray')
-            axes[row, i*3+2].set_title("Ground Truth")
-            axes[row, i*3+2].axis('off')
+    for i = 1:length(imageFiles)
+        rgbPath = fullfile(folder, imageFiles(i).name);
+        baseName = erase(imageFiles(i).name, '.png');
+        frameNum = str2double(erase(baseName, 'frame-'));
+        
+        if isnan(frameNum)
+            fprintf('Skipping file with invalid name: %s\n', baseName);
+            continue;
+        end
+        
+        gtPath = fullfile(folder, strcat(baseName, '_GT.png'));
+        if ~isfile(gtPath)
+            fprintf('No ground truth for frame %d\n', frameNum);
+            continue;
+        end
+        
+        [predMask, originalImg, labeledMask] = segmentBall(rgbPath);
+        if isempty(predMask)
+            fprintf('Segmentation failed for frame %d\n', frameNum);
+            continue;
+        end
+        
+        gtMask = imread(gtPath);
+        gtMask = imbinarize(gtMask);
+        
+        dsc = calculateDSC(predMask, gtMask);
+        dscValues = [dscValues, dsc];
+        frameNumbers = [frameNumbers, frameNum];
+        fprintf('Frame %d: DSC = %.4f\n', frameNum, dsc);
+    end
     
-    plt.tight_layout()
+    if isempty(dscValues)
+        fprintf('No valid DSC values computed. Check your input images and segmentation.\n');
+        return;
+    end
     
-    # Bar chart of DSC values
-    plt.figure(figsize=(10, 6))
-    plt.bar(frame_numbers, dsc_values, color='skyblue')
-    plt.xlabel('Image Number (Index)')
-    plt.ylabel('Dice Similarity Coefficient (DSC)')
-    plt.title('DSC Values for Each Image')
-    plt.tight_layout()
-    plt.show()
+    fprintf('Mean DSC: %.4f\n', mean(dscValues));
+    fprintf('Standard Deviation of DSC: %.4f\n', std(dscValues));
+    
+    % Plot DSC values
+    figure;
+    bar(frameNumbers, dscValues);
+    xlabel('Image Number (Index)');
+    ylabel('Dice Similarity Coefficient (DSC)');
+    title('DSC Values for Each Image');
+end
 
-def main(extracted_folder):
-    rgb_files = sorted(glob.glob(os.path.join(extracted_folder, "*[!_GT].png")))
-    
-    if not rgb_files:
-        print(f"No RGB images found in {extracted_folder}")
-        return
-    
-    results, dsc_values, frame_numbers = {}, [], []
-    
-    for rgb_path in rgb_files:
-        base_name = os.path.basename(rgb_path).split('.')[0]
-        
-        try:
-            frame_num = int(base_name.replace("frame-", ""))
-        except ValueError:
-            continue
-        
-        gt_path = os.path.join(extracted_folder, f"{base_name}_GT.png")
-        if not os.path.exists(gt_path):
-            continue
-            
-        pred_mask, original_img = ball_segmentation(rgb_path)
-        
-        if pred_mask is None or original_img is None:
-            continue
-        
-        gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
-        if gt_mask is None:
-            continue
-        
-        gt_mask_binary = (gt_mask > 0).astype(np.uint8) * 255
-        
-        dsc = calculate_dsc(pred_mask, gt_mask_binary)
-        dsc_values.append(dsc)
-        frame_numbers.append(frame_num)
-        
-        results[frame_num] = {
-            'original_img': original_img,
-            'pred_mask': pred_mask,
-            'gt_mask': gt_mask_binary,
-            'dsc': dsc
-        }
-        print(f"Frame {frame_num}: DSC = {dsc:.4f}")
-    
-    if len(results) >= 10:
-        plot_results(results, dsc_values, frame_numbers)
-    else:
-        print(f"Not enough frames to plot (found {len(results)} frames)")
+% Run the main function
+ball_segmentation_main();
 
-if __name__ == "__main__":
-    data_path = r"C:\Users\Student\Desktop\New folder\ball_frames.zip"
-    extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"
-    
-    extract_zip(data_path, extracted_folder)
-    main(extracted_folder)
