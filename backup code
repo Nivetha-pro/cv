@@ -31,7 +31,8 @@ def enhanced_ball_segmentation(rgb_path):
         enhanced_img = cv2.cvtColor(lab_img, cv2.COLOR_Lab2BGR)
 
         gray_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
-        blurred_img = cv2.GaussianBlur(gray_img, (5, 5), 0)  # Apply Gaussian blur for noise reduction
+        blurred_img = cv2.GaussianBlur(gray_img, (9, 9), 0)  # Apply Gaussian blur for noise reductionpip install opencv-python
+
 
 
         # Use a more specific color range (could be tweaked based on experiment)
@@ -42,7 +43,7 @@ def enhanced_ball_segmentation(rgb_path):
         color_mask = cv2.inRange(hsv_img, lower_color, upper_color)
         
         # Morphological operations to remove noise and smooth the mask
-        kernel = np.ones((5, 5), np.uint8)
+        kernel = np.ones((7, 7), np.uint8)
         pred_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
         pred_mask = cv2.morphologyEx(pred_mask, cv2.MORPH_OPEN, kernel)
         
@@ -52,7 +53,7 @@ def enhanced_ball_segmentation(rgb_path):
         # Filter contours based on area (assuming the ball is a larger object)
         pred_mask_refined = np.zeros_like(pred_mask)
         for contour in contours:
-            if cv2.contourArea(contour) > 100:  # Threshold area based on ball size
+            if cv2.contourArea(contour) > 200:  # Threshold area based on ball size
                 cv2.drawContours(pred_mask_refined, [contour], -1, (255), thickness=cv2.FILLED)
         
         # Optional: Use circular Hough Transform to detect the ball shape
