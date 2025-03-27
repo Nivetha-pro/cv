@@ -33,8 +33,6 @@ def enhanced_ball_segmentation(rgb_path):
         gray_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
         blurred_img = cv2.GaussianBlur(gray_img, (9, 9), 0)  # Apply Gaussian blur for noise reductionpip install opencv-python
 
-
-
         # Use a more specific color range (could be tweaked based on experiment)
         lower_color = np.array([0, 100, 100])   # Lower HSV bounds
         upper_color = np.array([30, 255, 255])  # Upper HSV bounds
