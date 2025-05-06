@@ -1,0 +1,107 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
+
+# === 1. Load data ===
+# Verify if the files exist first
+file_path_x = "C:/Users/Student/Desktop/New folder/coordinates/x.csv"
+file_path_y = "C:/Users/Student/Desktop/New folder/coordinates/y.csv"
+file_path_na = "C:/Users/Student/Desktop/New folder/coordinates/na.csv"
+file_path_nb = "C:/Users/Student/Desktop/New folder/coordinates/nb.csv"
+
+
+# Load data
+x_true = pd.read_csv(file_path_x, header=None).values.flatten()
+y_true = pd.read_csv(file_path_y, header=None).values.flatten()
+na = pd.read_csv(file_path_na, header=None).values.flatten()
+nb = pd.read_csv(file_path_nb, header=None).values.flatten()
+
+measurements = np.vstack((na, nb)).T
+ground_truth = np.vstack((x_true, y_true)).T
+
+n = len(measurements)
+dt = 0.5  # Time step
+
+# === 2. Initialize matrices ===
+
+# State transition matrix F
+F = np.array([
+    [1, 0, dt, 0],
+    [0, 1, 0, dt],
+    [0, 0, 1,  0],
+    [0, 0, 0,  1]
+])
+
+# Observation matrix H
+H = np.array([
+    [1, 0, 0, 0],
+    [0, 1, 0, 0]
+])
+
+# Process noise covariance Q (tune this if needed)
+q = 1e-4  # Reduced process noise
+Q = q * np.array([
+    [dt**4/4, 0, dt**3/2, 0],
+    [0, dt**4/4, 0, dt**3/2],
+    [dt**3/2, 0, dt**2, 0],
+    [0, dt**3/2, 0, dt**2]
+])
+
+# Measurement noise covariance R (estimated from noisy data)
+r_var = np.var(measurements - ground_truth, axis=0) / 2  # Reduce the variance
+R = np.diag(r_var)
+
+# Initial state estimate [x, y, vx, vy]
+x_est = np.array([na[0], nb[0], 0.1, 0.1], dtype=float)  # Small initial velocity
+
+# Initial covariance estimate P
+P = np.eye(4)
+
+# === 3. Kalman Filter Loop ===
+
+estimated_positions = []
+
+for z in measurements:
+    # Prediction
+    x_pred = F @ x_est
+    P_pred = F @ P @ F.T + Q
+
+    # Kalman Gain
+    S = H @ P_pred @ H.T + R
+    K = P_pred @ H.T @ np.linalg.inv(S)
+
+    # Update
+    y = z - (H @ x_pred)
+    x_est = x_pred + K @ y
+    P = (np.eye(4) - K @ H) @ P_pred
+
+    estimated_positions.append(x_est[:2])
+
+estimated_positions = np.array(estimated_positions)
+
+# === 4. Compute RMSE ===
+
+def compute_rmse(gt, pred):
+    errors = np.linalg.norm(gt - pred, axis=1)
+    return np.mean(errors), np.std(errors)
+
+rmse_noisy, std_noisy = compute_rmse(ground_truth, measurements)
+rmse_kf, std_kf = compute_rmse(ground_truth, estimated_positions)
+
+print(f"Noisy RMSE: {rmse_noisy:.4f} ± {std_noisy:.4f}")
+print(f"Kalman Filter RMSE: {rmse_kf:.4f} ± {std_kf:.4f}")
+
+# === 5. Plotting ===
+
+plt.figure(figsize=(10, 6))
+plt.plot(x_true, y_true, label="Ground Truth", linewidth=2)
+plt.plot(na, nb, 'r--', alpha=0.6, label="Noisy Measurements")
+plt.plot(estimated_positions[:, 0], estimated_positions[:, 1], 'g', label="Kalman Filter Estimate")
+plt.legend()
+plt.xlabel("X")
+plt.ylabel("Y")
+plt.title("Kalman Filter Object Tracking")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
