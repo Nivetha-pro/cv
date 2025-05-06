@@ -1,0 +1,176 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+
+# Part 1: Shape Feature Analysis
+def plot_shape_features(df_shape):
+    """Plot distributions of shape features per ball type"""
+    print("\nPlotting shape feature distributions...")
+    
+    shape_features = ['solidity', 'circularity', 'non_compactness', 'eccentricity']
+    
+    # Create a visualization with both boxplots and individual points
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    axes = axes.flatten()
+    
+    for i, feature in enumerate(shape_features):
+        # Use a strip plot overlaid on a box plot to show distribution and individual samples
+        sns.boxplot(x='ball_type', y=feature, data=df_shape, ax=axes[i], palette='Set3')
+        sns.stripplot(x='ball_type', y=feature, data=df_shape, ax=axes[i], 
+                     size=4, color='black', alpha=0.3)
+        
+        axes[i].set_title(f'Distribution of {feature.capitalize()} by Ball Type')
+        axes[i].set_xlabel('Ball Type')
+        axes[i].set_ylabel(feature.capitalize())
+        axes[i].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('shape_feature_distributions.png')
+    plt.show()
+    
+    # Calculate and display descriptive statistics
+    stats = df_shape.groupby('ball_type')[shape_features].describe()
+    print("\nShape Feature Statistics by Ball Type:")
+    print(stats)
+    
+    return stats
+
+# Part 2: Texture Feature Analysis
+def plot_glcm_features(df_glcm):
+    """Plot distributions of GLCM texture features per ball type for each color channel"""
+    print("\nPlotting GLCM texture feature distributions...")
+    
+    # Core texture features
+    texture_features = ['asm_avg', 'contrast_avg', 'correlation_avg']
+    
+    # Loop through each feature
+    for feature in texture_features:
+        # Create a figure with subplots for each color channel
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        
+        # Plot each color channel
+        for i, channel in enumerate(['R', 'G', 'B']):
+            # Filter data for this channel
+            channel_data = df_glcm[df_glcm['channel'] == channel]
+            
+            # Create boxplot with overlaid strip plot
+            sns.boxplot(x='ball_type', y=feature, data=channel_data, ax=axes[i], 
+                       palette='Set3')
+            sns.stripplot(x='ball_type', y=feature, data=channel_data, ax=axes[i],
+                         size=4, color='black', alpha=0.3)
+            
+            # Add labels and title
+            axes[i].set_title(f'{feature} - {channel} Channel')
+            axes[i].set_xlabel('Ball Type')
+            axes[i].set_ylabel(feature)
+            axes[i].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'glcm_{feature}_distribution.png')
+        plt.show()
+    
+    # Range features - variation across orientations
+    range_features = ['asm_range', 'contrast_range', 'correlation_range']
+    
+    # Create a separate plot for range features
+    for feature in range_features:
+        # Create a figure with subplots for each color channel
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        
+        # Plot each color channel
+        for i, channel in enumerate(['R', 'G', 'B']):
+            # Filter data for this channel
+            channel_data = df_glcm[df_glcm['channel'] == channel]
+            
+            # Create boxplot with overlaid strip plot
+            sns.boxplot(x='ball_type', y=feature, data=channel_data, ax=axes[i], 
+                       palette='Set3')
+            sns.stripplot(x='ball_type', y=feature, data=channel_data, ax=axes[i],
+                         size=4, color='black', alpha=0.3)
+            
+            # Add labels and title
+            axes[i].set_title(f'{feature} - {channel} Channel')
+            axes[i].set_xlabel('Ball Type')
+            axes[i].set_ylabel(feature)
+            axes[i].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'glcm_{feature}_distribution.png')
+        plt.show()
+    
+    # Calculate and display descriptive statistics for texture features per channel
+    stats = {}
+    for channel in ['R', 'G', 'B']:
+        channel_data = df_glcm[df_glcm['channel'] == channel]
+        stats[channel] = channel_data.groupby('ball_type')[texture_features + range_features].describe()
+        print(f"\nTexture Feature Statistics ({channel} Channel) by Ball Type:")
+        print(stats[channel])
+    
+    return stats
+
+# Helper function to create sample data for demonstration
+def create_sample_data():
+    """Create sample DataFrames for testing"""
+    print("Creating sample data for demonstration...")
+    
+    # Create sample shape data
+    np.random.seed(42)
+    shape_data = []
+    for ball_type in [1, 2, 3]:
+        for i in range(20):
+            shape_data.append({
+                'frame': i + 1,
+                'ball_type': ball_type,
+                'solidity': np.random.normal(0.85 - 0.1 * ball_type, 0.05),
+                'circularity': np.random.normal(0.95 - 0.15 * ball_type, 0.1),
+                'non_compactness': np.random.normal(1.1 + 0.4 * ball_type, 0.2),
+                'eccentricity': np.random.normal(0.2 + 0.15 * ball_type, 0.1)
+            })
+    df_shape = pd.DataFrame(shape_data)
+    
+    # Create sample GLCM data
+    glcm_data = []
+    for ball_type in [1, 2, 3]:
+        for channel in ['R', 'G', 'B']:
+            for i in range(20):
+                glcm_data.append({
+                    'frame': i + 1,
+                    'ball_type': ball_type,
+                    'channel': channel,
+                    'asm_avg': np.random.normal(0.2 - 0.05 * ball_type, 0.02),
+                    'asm_range': np.random.normal(0.05 + 0.02 * ball_type, 0.01),
+                    'contrast_avg': np.random.normal(10 + 5 * ball_type, 2),
+                    'contrast_range': np.random.normal(2 + ball_type, 0.5),
+                    'correlation_avg': np.random.normal(0.8 - 0.1 * ball_type, 0.05),
+                    'correlation_range': np.random.normal(0.05 + 0.05 * ball_type, 0.02)
+                })
+    df_glcm = pd.DataFrame(glcm_data)
+    
+    return df_shape, df_glcm
+
+# Main function to run the analysis
+def run_ball_region_analysis():
+    """Run shape and texture feature analysis for ball regions"""
+    print("Starting ball region analysis...")
+    
+    # Create sample data for demonstration
+    df_shape, df_glcm = create_sample_data()
+    
+    # Run shape feature analysis
+    shape_stats = plot_shape_features(df_shape)
+    
+    # Run texture feature analysis
+    texture_stats = plot_glcm_features(df_glcm)
+    
+    
+    return {
+        'shape_stats': shape_stats,
+        'texture_stats': texture_stats
+    }
+
+# Execute the analysis
+if __name__ == "__main__":
+    run_ball_region_analysis()
