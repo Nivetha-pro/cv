@@ -1,0 +1,247 @@
+import os
+import re
+import numpy as np
+import pandas as pd
+from skimage import io, measure
+from skimage.feature import graycomatrix, graycoprops
+from skimage.util import img_as_ubyte
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+
+# ---------------- SHAPE FEATURE EXTRACTION ----------------
+def extract_shape_features(indexed_img, frame_num):
+    features = []
+    props = measure.regionprops(indexed_img)
+    for region in props:
+        label = region.label
+        area = region.area
+        perimeter = region.perimeter if region.perimeter != 0 else 1
+        circularity = 4 * np.pi * area / (perimeter ** 2)
+        non_compactness = perimeter ** 2 / (4 * np.pi * area)
+        features.append({
+            'frame': frame_num,
+            'ball_type': label,
+            'solidity': region.solidity,
+            'circularity': circularity,
+            'non_compactness': non_compactness,
+            'eccentricity': region.eccentricity
+        })
+    return features
+
+# ---------------- TEXTURE FEATURE EXTRACTION ----------------
+def extract_texture_features(rgb_img, indexed_img, frame_num):
+    glcm_data = []
+    distances = [1]
+    angles = [0, np.pi/4, np.pi/2, 3*np.pi/4]
+    props = ['ASM', 'contrast', 'correlation']
+
+    for region_label in [1, 2, 3]:
+        mask = (indexed_img == region_label)
+        if not np.any(mask):
+            continue
+        for i, channel_name in enumerate(['R', 'G', 'B']):
+            channel = img_as_ubyte(rgb_img[:, :, i])
+            masked_channel = channel * mask
+            glcm = graycomatrix(masked_channel, distances=distances, angles=angles,
+                                symmetric=True, normed=True)
+            feature_values = {}
+            for prop in props:
+                values = graycoprops(glcm, prop)
+                feature_values[f'{prop.lower()}_mean'] = np.mean(values)
+                feature_values[f'{prop.lower()}_range'] = np.ptp(values)
+            glcm_data.append({
+                'frame': frame_num,
+                'ball_type': region_label,
+                'channel': channel_name,
+                **feature_values
+            })
+    return glcm_data
+
+# ---------------- IMAGE PROCESSING ----------------
+def process_images(folder):
+    shape_data = []
+    glcm_data = []
+
+    for file in os.listdir(folder):
+        if file.endswith('_indexed.png'):
+            frame_num = int(re.findall(r'frame-(\d+)', file)[0])
+            base_name = file.replace('_indexed.png', '')
+            indexed_path = os.path.join(folder, file)
+            rgb_path = os.path.join(folder, base_name + '_rgb.png')
+
+            indexed_img = io.imread(indexed_path)
+            rgb_img = io.imread(rgb_path)
+
+            shape_data.extend(extract_shape_features(indexed_img, frame_num))
+            glcm_data.extend(extract_texture_features(rgb_img, indexed_img, frame_num))
+
+    df_shape = pd.DataFrame(shape_data)
+    df_glcm = pd.DataFrame(glcm_data)
+    return df_shape, df_glcm
+
+# ---------------- BALL TYPE NAME MAPPING ----------------
+ball_type_names = {
+    1: 'Basketball',
+    2: 'Tennis',
+    3: 'Football'
+}
+
+# ---------------- SHAPE PLOTTING ----------------
+def plot_shape_features(df_shape):
+    df_shape['ball_name'] = df_shape['ball_type'].map(ball_type_names)
+    shape_features = ['solidity', 'circularity', 'non_compactness', 'eccentricity']
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    axes = axes.flatten()
+
+    for i, feature in enumerate(shape_features):
+        sns.boxplot(x='ball_name', y=feature, data=df_shape, ax=axes[i], palette='Set2')
+        sns.stripplot(x='ball_name', y=feature, data=df_shape, ax=axes[i],
+                      size=4, color='black', alpha=0.3)
+        axes[i].set_title(f'{feature.capitalize()} by Ball Type')
+        axes[i].set_xlabel('Ball Type')
+        axes[i].set_ylabel(feature.capitalize())
+        axes[i].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("shape_feature_distributions.png")
+    plt.show()
+
+# ---------------- COMBINED TEXTURE MEAN PLOT ----------------
+def plot_combined_glcm_features(df_glcm):
+    df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
+
+    selected_features = {
+        'asm_mean': 'ASM (Red)',
+        'contrast_mean': 'Contrast (Green)',
+        'correlation_mean': 'Correlation (Blue)'
+    }
+    selected_channels = {
+        'asm_mean': 'R',
+        'contrast_mean': 'G',
+        'correlation_mean': 'B'
+    }
+
+    plot_data = []
+    for feature, label in selected_features.items():
+        channel = selected_channels[feature]
+        temp_df = df_glcm[df_glcm['channel'] == channel]
+        for ball_type in temp_df['ball_type'].unique():
+            values = temp_df[temp_df['ball_type'] == ball_type][feature]
+            for value in values:
+                plot_data.append({
+                    'Feature': label,
+                    'Ball Type': ball_type_names[ball_type],
+                    'Value': value
+                })
+
+    plot_df = pd.DataFrame(plot_data)
+
+    plt.figure(figsize=(10, 6))
+    sns.boxplot(x='Ball Type', y='Value', hue='Feature', data=plot_df, palette=['red', 'green', 'blue'])
+    sns.stripplot(x='Ball Type', y='Value', hue='Feature', data=plot_df,
+                  dodge=True, palette=['darkred', 'darkgreen', 'darkblue'], alpha=0.4, size=4)
+
+    plt.title("Texture Features by Ball Type - Mean", fontsize=16)
+    plt.xlabel("Ball Type")
+    plt.ylabel("Feature Value")
+    handles, labels = plt.gca().get_legend_handles_labels()
+    plt.legend(handles[:3], labels[:3], title="Feature (Channel)")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("combined_texture_features_mean.png")
+    plt.show()
+
+# ---------------- COMBINED TEXTURE RANGE PLOT ----------------
+def plot_combined_glcm_range_features(df_glcm):
+    df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
+
+    selected_range_features = {
+        'asm_range': 'ASM (Red)',
+        'contrast_range': 'Contrast (Green)',
+        'correlation_range': 'Correlation (Blue)'
+    }
+    selected_channels = {
+        'asm_range': 'R',
+        'contrast_range': 'G',
+        'correlation_range': 'B'
+    }
+
+    plot_data = []
+    for feature, label in selected_range_features.items():
+        channel = selected_channels[feature]
+        temp_df = df_glcm[df_glcm['channel'] == channel]
+        for ball_type in temp_df['ball_type'].unique():
+            values = temp_df[temp_df['ball_type'] == ball_type][feature]
+            for value in values:
+                plot_data.append({
+                    'Feature': label,
+                    'Ball Type': ball_type_names[ball_type],
+                    'Value': value
+                })
+
+    plot_df = pd.DataFrame(plot_data)
+
+    plt.figure(figsize=(10, 6))
+    sns.boxplot(x='Ball Type', y='Value', hue='Feature', data=plot_df, palette=['red', 'green', 'blue'])
+    sns.stripplot(x='Ball Type', y='Value', hue='Feature', data=plot_df,
+                  dodge=True, palette=['darkred', 'darkgreen', 'darkblue'], alpha=0.4, size=4)
+
+    plt.title("Texture Features by Ball Type - Range", fontsize=16)
+    plt.xlabel("Ball Type")
+    plt.ylabel("Feature Value")
+    handles, labels = plt.gca().get_legend_handles_labels()
+    plt.legend(handles[:3], labels[:3], title="Feature (Channel)")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("combined_texture_features_range.png")
+    plt.show()
+
+# ---------------- CLASSIFICATION ----------------
+def classify_ball_types(df_shape, df_glcm):
+    df_shape['ball_name'] = df_shape['ball_type'].map(ball_type_names)
+    df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
+
+    df = pd.merge(df_shape, df_glcm, on=['frame', 'ball_type'], how='inner')
+
+    feature_columns = ['solidity', 'circularity', 'non_compactness', 'eccentricity',
+                       'asm_mean', 'contrast_mean', 'correlation_mean',
+                       'asm_range', 'contrast_range', 'correlation_range']
+    X = df[feature_columns]
+    y = df['ball_type']
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.3, random_state=42)
+
+    clf = RandomForestClassifier(random_state=42)
+    clf.fit(X_train, y_train)
+
+    y_pred = clf.predict(X_test)
+
+    print("Classification Report:")
+    print(classification_report(y_test, y_pred, target_names=list(ball_type_names.values())))
+    print("Confusion Matrix:")
+    print(confusion_matrix(y_test, y_pred))
+
+# ---------------- MAIN ----------------
+if __name__ == "__main__":
+    folder_path = r"C:\Users\Student\Desktop\New folder\ball_frames\ball_frames"
+    df_shape, df_glcm = process_images(folder_path)
+
+    df_shape.to_csv("shape_features.csv", index=False)
+    df_glcm.to_csv("glcm_features.csv", index=False)
+
+    print("Shape Features:")
+    print(df_shape.head())
+    print("Texture Features:")
+    print(df_glcm.head())
+
+    plot_shape_features(df_shape)
+    plot_combined_glcm_features(df_glcm)
+    plot_combined_glcm_range_features(df_glcm)
+    classify_ball_types(df_shape, df_glcm)
