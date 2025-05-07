@@ -114,91 +114,70 @@ def plot_shape_features(df_shape):
 def plot_combined_glcm_features(df_glcm):
     df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
 
-    selected_features = {
-        'asm_mean': 'ASM (Red)',
-        'contrast_mean': 'Contrast (Green)',
-        'correlation_mean': 'Correlation (Blue)'
-    }
-    selected_channels = {
-        'asm_mean': 'R',
-        'contrast_mean': 'G',
-        'correlation_mean': 'B'
-    }
+    features = ['asm_mean', 'contrast_mean', 'correlation_mean']
+    channels = ['R', 'G', 'B']
+    feature_labels = ['ASM', 'Contrast', 'Correlation']
+    feature_palette = {'Basketball': 'orange', 'Tennis': 'green', 'Football': 'blue'}
 
-    plot_data = []
-    for feature, label in selected_features.items():
-        channel = selected_channels[feature]
-        temp_df = df_glcm[df_glcm['channel'] == channel]
-        for ball_type in temp_df['ball_type'].unique():
-            values = temp_df[temp_df['ball_type'] == ball_type][feature]
-            for value in values:
-                plot_data.append({
-                    'Feature': label,
-                    'Ball Type': ball_type_names[ball_type],
-                    'Value': value
-                })
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
 
-    plot_df = pd.DataFrame(plot_data)
+    for i, (feature, label) in enumerate(zip(features, feature_labels)):
+        ax = axes[i]
+        for ball_type in df_glcm['ball_type'].unique():
+            ball_name = ball_type_names[ball_type]
+            subset = df_glcm[(df_glcm['channel'] == channels[i]) & (df_glcm['ball_type'] == ball_type)]
+            sns.boxplot(x='ball_name', y=feature, data=subset, ax=ax,
+                        palette=feature_palette, showfliers=False)
+            sns.stripplot(x='ball_name', y=feature, data=subset, ax=ax,
+                          color='black', alpha=0.4, jitter=0.2, size=4)
+        ax.set_title(f'{label} (Mean)', fontsize=14)
+        ax.set_xlabel('')
+        if i == 0:
+            ax.set_ylabel('Feature Value')
+        else:
+            ax.set_ylabel('')
+        ax.grid(True, alpha=0.3)
 
-    plt.figure(figsize=(10, 6))
-    sns.boxplot(x='Ball Type', y='Value', hue='Feature', data=plot_df, palette=['red', 'green', 'blue'])
-    sns.stripplot(x='Ball Type', y='Value', hue='Feature', data=plot_df,
-                  dodge=True, palette=['darkred', 'darkgreen', 'darkblue'], alpha=0.4, size=4)
-
-    plt.title("Texture Features by Ball Type - Mean", fontsize=16)
-    plt.xlabel("Ball Type")
-    plt.ylabel("Feature Value")
-    handles, labels = plt.gca().get_legend_handles_labels()
-    plt.legend(handles[:3], labels[:3], title="Feature (Channel)")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig("combined_texture_features_mean.png")
+    plt.suptitle("Texture Features by Ball Type - Mean", fontsize=18)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig("combined_texture_features_mean_improved.png")
     plt.show()
+
 
 # ---------------- COMBINED TEXTURE RANGE PLOT ----------------
 def plot_combined_glcm_range_features(df_glcm):
     df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
 
-    selected_range_features = {
-        'asm_range': 'ASM (Red)',
-        'contrast_range': 'Contrast (Green)',
-        'correlation_range': 'Correlation (Blue)'
-    }
-    selected_channels = {
-        'asm_range': 'R',
-        'contrast_range': 'G',
-        'correlation_range': 'B'
-    }
+    features = ['asm_range', 'contrast_range', 'correlation_range']
+    channels = ['R', 'G', 'B']
+    feature_labels = ['ASM', 'Contrast', 'Correlation']
+    feature_palette = {'Basketball': 'orange', 'Tennis': 'green', 'Football': 'blue'}
 
-    plot_data = []
-    for feature, label in selected_range_features.items():
-        channel = selected_channels[feature]
-        temp_df = df_glcm[df_glcm['channel'] == channel]
-        for ball_type in temp_df['ball_type'].unique():
-            values = temp_df[temp_df['ball_type'] == ball_type][feature]
-            for value in values:
-                plot_data.append({
-                    'Feature': label,
-                    'Ball Type': ball_type_names[ball_type],
-                    'Value': value
-                })
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
 
-    plot_df = pd.DataFrame(plot_data)
+    for i, (feature, label) in enumerate(zip(features, feature_labels)):
+        ax = axes[i]
+        for ball_type in df_glcm['ball_type'].unique():
+            ball_name = ball_type_names[ball_type]
+            subset = df_glcm[(df_glcm['channel'] == channels[i]) & (df_glcm['ball_type'] == ball_type)]
+            sns.boxplot(x='ball_name', y=feature, data=subset, ax=ax,
+                        palette=feature_palette, showfliers=False)
+            sns.stripplot(x='ball_name', y=feature, data=subset, ax=ax,
+                          color='black', alpha=0.4, jitter=0.2, size=4)
+        ax.set_title(f'{label} (Range)', fontsize=14)
+        ax.set_xlabel('')
+        if i == 0:
+            ax.set_ylabel('Feature Value')
+        else:
+            ax.set_ylabel('')
+        ax.grid(True, alpha=0.3)
 
-    plt.figure(figsize=(10, 6))
-    sns.boxplot(x='Ball Type', y='Value', hue='Feature', data=plot_df, palette=['red', 'green', 'blue'])
-    sns.stripplot(x='Ball Type', y='Value', hue='Feature', data=plot_df,
-                  dodge=True, palette=['darkred', 'darkgreen', 'darkblue'], alpha=0.4, size=4)
-
-    plt.title("Texture Features by Ball Type - Range", fontsize=16)
-    plt.xlabel("Ball Type")
-    plt.ylabel("Feature Value")
-    handles, labels = plt.gca().get_legend_handles_labels()
-    plt.legend(handles[:3], labels[:3], title="Feature (Channel)")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig("combined_texture_features_range.png")
+    plt.suptitle("Texture Features by Ball Type - Range", fontsize=18)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig("combined_texture_features_range_improved.png")
     plt.show()
+
+
 
 # ---------------- CLASSIFICATION ----------------
 def classify_ball_types(df_shape, df_glcm):
@@ -233,8 +212,12 @@ if __name__ == "__main__":
     folder_path = r"C:\Users\Student\Desktop\New folder\ball_frames\ball_frames"
     df_shape, df_glcm = process_images(folder_path)
 
+    df_shape['ball_name'] = df_shape['ball_type'].map(ball_type_names)
     df_shape.to_csv("shape_features.csv", index=False)
+
+    df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
     df_glcm.to_csv("glcm_features.csv", index=False)
+
 
     print("Shape Features:")
     print(df_shape.head())
