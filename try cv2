@@ -83,10 +83,19 @@ def process_images(folder):
 
     for file in os.listdir(folder):
         if file.endswith('_indexed.png'):
-            frame_num = int(re.findall(r'frame-(\d+)', file)[0])
+            try:
+                frame_num = int(re.findall(r'frame-(\d+)', file)[0])
+            except IndexError:
+                print(f"Skipping file without frame number: {file}")
+                continue
+
             base_name = file.replace('_indexed.png', '')
             indexed_path = os.path.join(folder, file)
             rgb_path = os.path.join(folder, base_name + '_rgb.png')
+
+            if not os.path.exists(rgb_path):
+                print(f"Missing RGB image for: {file}")
+                continue
 
             indexed_img = io.imread(indexed_path)
             rgb_img = io.imread(rgb_path)
@@ -98,6 +107,10 @@ def process_images(folder):
 
 # ---------------- PLOTTING ----------------
 def plot_shape_features(df_shape):
+    if 'ball_type' not in df_shape.columns:
+        print("Error: 'ball_type' column not found in shape features.")
+        return
+
     df_shape['ball_name'] = df_shape['ball_type'].map(ball_type_names)
     features = ['solidity', 'circularity', 'non_compactness', 'eccentricity']
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
@@ -115,6 +128,10 @@ def plot_shape_features(df_shape):
     plt.show()
 
 def plot_texture_features(df_glcm, mode='mean'):
+    if 'ball_type' not in df_glcm.columns:
+        print("Error: 'ball_type' column not found in texture features.")
+        return
+
     df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
     base = f'_{mode}'
     features = [f'asm{base}', f'contrast{base}', f'correlation{base}']
@@ -126,10 +143,9 @@ def plot_texture_features(df_glcm, mode='mean'):
     for i, (feature, label) in enumerate(zip(features, labels)):
         ax = axes[i]
         for ball_type in df_glcm['ball_type'].unique():
-            ball_name = ball_type_names[ball_type]
+            ball_name = ball_type_names.get(ball_type, f"Type {ball_type}")
             subset = df_glcm[(df_glcm['channel'] == channels[i]) & (df_glcm['ball_type'] == ball_type)]
-            sns.boxplot(x='ball_name', y=feature, data=subset, ax=ax,
-                        showfliers=False)
+            sns.boxplot(x='ball_name', y=feature, data=subset, ax=ax, showfliers=False)
             sns.stripplot(x='ball_name', y=feature, data=subset, ax=ax,
                           color='black', alpha=0.4, jitter=0.2, size=4)
         ax.set_title(f'{label} ({mode.capitalize()})')
@@ -147,10 +163,18 @@ def plot_texture_features(df_glcm, mode='mean'):
 
 # ---------------- CLASSIFICATION ----------------
 def classify_ball_types(df_shape, df_glcm):
+    if df_shape.empty or df_glcm.empty:
+        print("Error: Empty dataframes provided for classification.")
+        return
+
     df_shape['ball_name'] = df_shape['ball_type'].map(ball_type_names)
     df_glcm['ball_name'] = df_glcm['ball_type'].map(ball_type_names)
 
     df = pd.merge(df_shape, df_glcm, on=['frame', 'ball_type'], how='inner')
+
+    if df.empty:
+        print("No matching shape/texture data to classify.")
+        return
 
     features = ['solidity', 'circularity', 'non_compactness', 'eccentricity',
                 'asm_mean', 'contrast_mean', 'correlation_mean',
@@ -172,23 +196,28 @@ def classify_ball_types(df_shape, df_glcm):
     print("Confusion Matrix:")
     print(confusion_matrix(y_test, y_pred))
 
-    # Cross-validation accuracy
     scores = cross_val_score(clf, X_scaled, y, cv=5)
     print(f"Cross-validated accuracy: {np.mean(scores):.3f}")
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    folder_path = r"C:\Users\Student\Desktop\New folder\ball_frames\ball_frames"  # update path if needed
+    folder_path = r"C:\Users\Student\Desktop\New folder\ball_frames\ball_frames"  # UPDATE if needed
 
     df_shape, df_glcm = process_images(folder_path)
-    df_shape.to_csv("shape_features.csv", index=False)
-    df_glcm.to_csv("glcm_features.csv", index=False)
 
-    print("Sample Shape Features:\n", df_shape.head())
-    print("Sample Texture Features:\n", df_glcm.head())
+    print("Shape Features Extracted:", df_shape.shape)
+    print("Texture Features Extracted:", df_glcm.shape)
 
-    plot_shape_features(df_shape)
-    plot_texture_features(df_glcm, mode='mean')
-    plot_texture_features(df_glcm, mode='range')
+    if not df_shape.empty:
+        df_shape.to_csv("shape_features.csv", index=False)
+    if not df_glcm.empty:
+        df_glcm.to_csv("glcm_features.csv", index=False)
+
+    if not df_shape.empty:
+        plot_shape_features(df_shape)
+    if not df_glcm.empty:
+        plot_texture_features(df_glcm, mode='mean')
+        plot_texture_features(df_glcm, mode='range')
 
     classify_ball_types(df_shape, df_glcm)
+
