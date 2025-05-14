@@ -1,136 +1,113 @@
 import os
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.mixture import GaussianMixture
-from scipy.linalg import pinv
+from pydmps.dmp_discrete import DMPs_discrete
 
-# === Define Paths ===
-data_folder = "datasets"  # Set this to the folder where the .csv files are
-files = ["CShape.csv", "Line.csv", "WShape.csv", "Sshape.csv"]
-dt = 0.01
+# ----- STEP 1: Load and prepare the trajectory -----
+demo_folder = r"C:\Users\Student\Desktop\Assessment Item 2 - datasets\datasets"
+demo_file = "SShape.csv"
 
-# === DMP Class ===
-class DMP:
-    def __init__(self, n_basis=30, alpha=48.0, beta=None):
-        self.n_basis = n_basis
-        self.alpha = alpha
-        self.beta = beta if beta is not None else alpha / 4.0
+# Correctly join the paths using os.path.join() to create the full file path
+file_path = os.path.join(demo_folder, demo_file)
 
-    def generate_basis_functions(self, time, duration):
-        self.centers = np.exp(-self.alpha * np.linspace(0, 1, self.n_basis))
-        self.widths = np.ones(self.n_basis) * self.n_basis ** 1.5 / self.centers / duration
+# Load the demonstration trajectory
+if os.path.exists(file_path):
+    y_demo = np.loadtxt(file_path, delimiter=",").T  # Final shape: (150, 2)
+    print("Fixed trajectory shape:", y_demo.shape)
+else:
+    print(f"Error: {file_path} not found!")
+    exit()  # Exit if file is not found
 
-    def imitate(self, y_demo, duration=1.0, dt=0.01):
-        self.timesteps = int(duration / dt)
-        self.time = np.linspace(0, duration, self.timesteps)
-        self.y0 = y_demo[0]
-        self.goal = y_demo[-1]
+# ----- STEP 2: RMSE function -----
+def compute_rmse(y_true, y_pred):
+    return np.sqrt(np.mean(np.sum((y_true - y_pred) ** 2, axis=1)))
 
-        x = np.exp(-self.alpha * self.time / duration)
-        y_demo = np.array(y_demo)
-        dy = np.gradient(y_demo, axis=0) / dt
-        ddy = np.gradient(dy, axis=0) / dt
+# ----- STEP 3: Evaluate DMPs with different n_bfs -----
+n_bfs_list = list(range(10, 301, 10))  # Range of basis functions to test
+rmse_list = []
+trajectories = []
 
-        self.generate_basis_functions(self.time, duration)
-        psi = np.exp(-self.widths[:, None] * (x - self.centers[:, None]) ** 2)
-        f_target = (ddy - self.alpha * (self.beta * (self.goal - y_demo) - dy)) * duration**2
+# Use only the first (T-1) points for training and RMSE
+y_demo_trimmed = y_demo[:-1]  # Trim the last point (to match the length of the time steps)
+timesteps = len(y_demo_trimmed)
+dt = 1.0 / timesteps  # Time step based on number of data points
 
-        denom = np.sum(psi, axis=0) + 1e-10
-        psi_normalized = psi / denom
-        self.weights = np.dot(psi_normalized, f_target)
+# Loop through different number of basis functions
+for n_bfs in n_bfs_list:
+    # Initialize DMP with 2 dimensions and n_bfs basis functions
+    dmp = DMPs_discrete(n_dmps=2, n_bfs=n_bfs, dt=dt)
+    dmp.y0 = y_demo[0]  # Set initial position (first point in the demo)
+    dmp.goal = y_demo[-1]  # Set goal position (last point in the demo)
+    dmp.timesteps = timesteps  # Set number of timesteps (trajectory length)
 
-    def rollout(self, duration=1.0, dt=0.01):
-        y = np.zeros((self.timesteps, 2))
-        dy = np.zeros((self.timesteps, 2))
-        ddy = np.zeros((self.timesteps, 2))
-        y[0] = self.y0
-        dy[0] = 0
+    # Imitate the trajectory (train the DMP)
+    dmp.imitate_path(y_des=y_demo_trimmed.T)  # Transpose the trajectory to fit DMP shape (2, T-1)
+    y_pred, _, _ = dmp.rollout()  # Generate the predicted trajectory
 
-        x = 1.0
-        for t in range(1, self.timesteps):
-            psi = np.exp(-self.widths * (x - self.centers) ** 2)
-            f = (psi @ self.weights) / (np.sum(psi) + 1e-10)
+    # Compute the RMSE for the imitation
+    rmse = compute_rmse(y_demo_trimmed, y_pred)
+    rmse_list.append(rmse)  # Store RMSE for each n_bfs
+    trajectories.append(y_pred)  # Store the trajectory for each n_bfs
 
-            ddy[t - 1] = self.alpha * (self.beta * (self.goal - y[t - 1]) - dy[t - 1]) + f / duration**2
-            dy[t] = dy[t - 1] + ddy[t - 1] * dt
-            y[t] = y[t - 1] + dy[t] * dt
+    # Print the RMSE for the current number of basis functions
+    print(f"n_bfs = {n_bfs:3d} → RMSE = {rmse:.4f}")
 
-            x -= self.alpha * x * dt / duration
+# ----- STEP 4: Plot best DMP trajectory vs demonstration -----
+# Find the best result (minimum RMSE)
+best_idx = np.argmin(rmse_list)
+best_n_bfs = n_bfs_list[best_idx]
+best_pred = trajectories[best_idx]
 
-        return y
+# Plot the best DMP trajectory compared to the demonstration
+plt.figure(figsize=(6, 5))
+plt.plot(y_demo_trimmed[:, 0], y_demo_trimmed[:, 1], 'k--', label='Demonstration')
+plt.plot(best_pred[:, 0], best_pred[:, 1], 'b-', label=f'DMP (n_bfs={best_n_bfs})')
+plt.scatter(*y_demo[0], c='g', label='Start')
+plt.scatter(*y_demo[-1], c='r', label='Goal')
+plt.title(f"Best DMP Trajectory (n_bfs={best_n_bfs})\nRMSE = {rmse_list[best_idx]:.4f}")
+plt.xlabel("X")
+plt.ylabel("Y")
+plt.axis("equal")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
 
-# === GMR Function ===
-def gmr(gmm, x_query):
-    D = x_query.shape[1]
-    means = gmm.means_
-    covs = gmm.covariances_
-    priors = gmm.weights_
-    d_out = means.shape[1] - D
-    y_pred = []
+# ----- STEP 5: Plot RMSE vs n_bfs -----
+# Plot the RMSE against the number of basis functions
+plt.figure(figsize=(6, 4))
+plt.plot(n_bfs_list, rmse_list, marker='o', linestyle='-')
+plt.title("RMSE vs. Number of Basis Functions")
+plt.xlabel("n_bfs")
+plt.ylabel("RMSE")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig("SShape_rmse_vs_n_bfs.png", dpi=300, bbox_inches='tight')
+plt.show()
 
-    for x in x_query:
-        h = np.zeros(gmm.n_components)
-        y = np.zeros(d_out)
-        for i in range(gmm.n_components):
-            mu_x = means[i, :D]
-            mu_y = means[i, D:]
-            Sigma_xx = covs[i][:D, :D]
-            Sigma_yx = covs[i][D:, :D]
+# ----- STEP 6: Plot the DMP result for n_bfs = 150 -----
+# Specify the number of basis functions for which you want to plot the result
+target_n_bfs = 130
 
-            det = np.linalg.det(Sigma_xx + 1e-6 * np.eye(D))
-            norm_const = 1.0 / (np.sqrt((2 * np.pi) ** D * det))
-            exp_term = np.exp(-0.5 * (x - mu_x) @ pinv(Sigma_xx) @ (x - mu_x))
-            h[i] = priors[i] * norm_const * exp_term
+if target_n_bfs in n_bfs_list:
+    idx = n_bfs_list.index(target_n_bfs)
+    y_pred_150 = trajectories[idx]
+    rmse_150 = rmse_list[idx]
 
-        h /= np.sum(h) + 1e-8
-
-        for i in range(gmm.n_components):
-            mu_x = means[i, :D]
-            mu_y = means[i, D:]
-            Sigma_xx = covs[i][:D, :D]
-            Sigma_yx = covs[i][D:, :D]
-            y += h[i] * (mu_y + Sigma_yx @ pinv(Sigma_xx) @ (x - mu_x))
-
-        y_pred.append(y)
-    return np.array(y_pred)
-
-# === Process Each File ===
-for file in files:
-    print(f"\nProcessing {file}...")
-    path = os.path.join(data_folder, file)
-    data = pd.read_csv(path).to_numpy()
-
-    if data.shape[0] < 3:
-        print(f"Skipping {file}: Not enough points ({data.shape[0]} rows)")
-        continue
-
-    # --- DMP ---
-    dmp = DMP(n_basis=30)
-    dmp.imitate(data)
-    dmp_traj = dmp.rollout()
-
-    # --- SEDS via GMM+GMR ---
-    vel = np.gradient(data, axis=0) / dt
-    X_train = np.hstack((data, vel))
-    gmm = GaussianMixture(n_components=5, covariance_type='full', random_state=0).fit(X_train)
-    new_vel = gmr(gmm, data)
-
-    seds_traj = [data[0]]
-    for i in range(1, len(new_vel)):
-        seds_traj.append(seds_traj[-1] + new_vel[i - 1] * dt)
-    seds_traj = np.array(seds_traj)
-
-    # --- Plot ---
-    plt.figure(figsize=(6, 6))
-    plt.plot(data[:, 0], data[:, 1], label='Original', linewidth=2)
-    plt.plot(dmp_traj[:, 0], dmp_traj[:, 1], '--', label='DMP')
-    plt.plot(seds_traj[:, 0], seds_traj[:, 1], ':', label='SEDS (GMR)')
-    plt.title(f"Trajectory Learning - {file[:-4]}")
+    # Plot the DMP trajectory for the specified n_bfs
+    plt.figure(figsize=(6, 5))
+    plt.plot(y_demo_trimmed[:, 0], y_demo_trimmed[:, 1], 'k--', label='Demonstration')
+    plt.plot(y_pred_150[:, 0], y_pred_150[:, 1], 'b-', label=f'DMP (n_bfs={target_n_bfs})')
+    plt.scatter(*y_demo[0], c='g', label='Start')
+    plt.scatter(*y_demo[-1], c='r', label='Goal')
+    plt.title(f"DMP Trajectory (n_bfs={target_n_bfs})\nRMSE = {rmse_150:.4f}")
     plt.xlabel("X")
     plt.ylabel("Y")
-    plt.axis('equal')
-    plt.grid(True)
+    plt.axis("equal")
     plt.legend()
+    plt.grid(True)
     plt.tight_layout()
+    plt.savefig(f"SShape_dmp_trajectory_n_bfs_{target_n_bfs}.png", dpi=300, bbox_inches='tight')
     plt.show()
+else:
+    print(f"n_bfs = {target_n_bfs} not found in n_bfs_list")
