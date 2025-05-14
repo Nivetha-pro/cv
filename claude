@@ -2,124 +2,117 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.mixture import GaussianMixture
 from scipy.linalg import pinv
+from sklearn.mixture import GaussianMixture
 from pydmps.dmp_discrete import DMPs_discrete
 
-# === File and Folder Settings ===
-data_dir = r"C:\Users\Student\Desktop\Assessment Item 2 - datasets\datasets"
-datasets = ["CShape.csv", "Line.csv", "WShape.csv", "SShape.csv"]
-dt = 0.01
+# === SETTINGS ===
+DATA_DIR = r"C:\Users\Student\Desktop\Assessment Item 2 - datasets\datasets"
+FILES = ["CShape.csv", "Line.csv", "WShape.csv", "SShape.csv"]
+DT = 0.01
 
-# === Helper: RMSE Calculation ===
 def compute_rmse(true, pred):
-    return np.sqrt(np.mean(np.sum((true - pred)**2, axis=1)))
+    return np.sqrt(np.mean(np.sum((true - pred) ** 2, axis=1)))
 
-# === Helper: Gaussian Mixture Regression (SEDS Approx) ===
 def gmr(gmm, x_query):
     D = x_query.shape[1]
-    means, covs, priors = gmm.means_, gmm.covariances_, gmm.weights_
-    d_out = means.shape[1] - D
     y_pred = []
-
     for x in x_query:
-        h = np.zeros(gmm.n_components)
-        y = np.zeros(d_out)
-
+        h, y = np.zeros(gmm.n_components), np.zeros(gmm.means_.shape[1] - D)
         for i in range(gmm.n_components):
-            mu_x, mu_y = means[i, :D], means[i, D:]
-            Sigma_xx, Sigma_yx = covs[i][:D, :D], covs[i][D:, :D]
-            det = np.linalg.det(Sigma_xx + 1e-6 * np.eye(D))
-            norm = 1.0 / np.sqrt((2 * np.pi) ** D * det)
+            mu = gmm.means_[i]
+            Sigma = gmm.covariances_[i]
+            mu_x, mu_y = mu[:D], mu[D:]
+            Sigma_xx, Sigma_yx = Sigma[:D, :D], Sigma[D:, :D]
+            norm = 1 / np.sqrt((2 * np.pi) ** D * np.linalg.det(Sigma_xx + 1e-6*np.eye(D)))
             exp = np.exp(-0.5 * (x - mu_x).T @ pinv(Sigma_xx) @ (x - mu_x))
-            h[i] = priors[i] * norm * exp
-
+            h[i] = gmm.weights_[i] * norm * exp
         h /= np.sum(h) + 1e-8
-
         for i in range(gmm.n_components):
-            mu_x, mu_y = means[i, :D], means[i, D:]
-            Sigma_xx, Sigma_yx = covs[i][:D, :D], covs[i][D:, :D]
+            mu = gmm.means_[i]
+            Sigma = gmm.covariances_[i]
+            mu_x, mu_y = mu[:D], mu[D:]
+            Sigma_xx, Sigma_yx = Sigma[:D, :D], Sigma[D:, :D]
             y += h[i] * (mu_y + Sigma_yx @ pinv(Sigma_xx) @ (x - mu_x))
-
         y_pred.append(y)
     return np.array(y_pred)
 
-# === Store Summary Results ===
+# === MAIN PROCESS ===
 summary = []
-
-# === Main Loop for Each Trajectory File ===
-for file in datasets:
-    file_path = os.path.join(data_dir, file)
-    if not os.path.exists(file_path):
-        print(f"File not found: {file}")
-        continue
+for file in FILES:
+    path = os.path.join(DATA_DIR, file)
+    if not os.path.exists(path): continue
+    data = np.loadtxt(path, delimiter=",").T
+    if data.shape[0] < 3: continue
 
     print(f"\nProcessing {file}...")
-    demo = np.loadtxt(file_path, delimiter=",").T
-    if demo.shape[0] < 3:
-        print("Not enough points, skipping.")
-        continue
 
-    demo_trimmed = demo[:-1]
-    timesteps = len(demo_trimmed)
-
-    # --- DMP Training (Varying n_bfs) ---
-    n_bfs_range = list(range(10, 201, 10))
-    dmp_rmses = []
-    dmp_trajectories = []
-
-    for n_bfs in n_bfs_range:
+    # === DMP: Tune n_bfs ===
+    best_dmp_rmse, best_dmp_n_bfs = float("inf"), None
+    demo_trim = data[:-1]
+    timesteps = len(demo_trim)
+    dmp_preds = {}
+    for n_bfs in range(10, 201, 10):
         dmp = DMPs_discrete(n_dmps=2, n_bfs=n_bfs, dt=1.0 / timesteps)
-        dmp.y0 = demo[0]
-        dmp.goal = demo[-1]
+        dmp.y0, dmp.goal = data[0], data[-1]
         dmp.timesteps = timesteps
-        dmp.imitate_path(demo_trimmed.T)
-        dmp_pred, _, _ = dmp.rollout()
-        rmse = compute_rmse(demo_trimmed, dmp_pred)
-        dmp_rmses.append(rmse)
-        dmp_trajectories.append(dmp_pred)
+        dmp.imitate_path(y_des=demo_trim.T)
+        pred, _, _ = dmp.rollout()
+        rmse = compute_rmse(demo_trim, pred)
+        dmp_preds[n_bfs] = (rmse, pred)
+        if rmse < best_dmp_rmse:
+            best_dmp_rmse, best_dmp_n_bfs = rmse, n_bfs
 
-    best_dmp_idx = np.argmin(dmp_rmses)
-    best_dmp_rmse = dmp_rmses[best_dmp_idx]
-    best_dmp_n_bfs = n_bfs_range[best_dmp_idx]
-    best_dmp_traj = dmp_trajectories[best_dmp_idx]
+    best_dmp_pred = dmp_preds[best_dmp_n_bfs][1]
 
-    # --- SEDS Approximation (via GMM+GMR) ---
-    vel = np.gradient(demo, axis=0) / dt
-    X_train = np.hstack((demo, vel))
-    gmm = GaussianMixture(n_components=5, covariance_type='full', random_state=0).fit(X_train)
-    seds_vel = gmr(gmm, demo)
-    seds_traj = [demo[0]]
-    for i in range(1, len(seds_vel)):
-        seds_traj.append(seds_traj[-1] + seds_vel[i - 1] * dt)
-    seds_traj = np.array(seds_traj)
-    seds_rmse = compute_rmse(demo, seds_traj)
+    # === SEDS: Tune n_components ===
+    vel = np.gradient(data, axis=0) / DT
+    X_train = np.hstack((data, vel))
+    best_seds_rmse, best_seds_n = float("inf"), None
+    seds_trajs = {}
+    for n_comp in range(2, 11):  # tune GMMs from 2–10 Gaussians
+        gmm = GaussianMixture(n_components=n_comp, covariance_type='full', random_state=0)
+        gmm.fit(X_train)
+        vel_pred = gmr(gmm, data)
+        traj = [data[0]]
+        for i in range(1, len(vel_pred)):
+            traj.append(traj[-1] + vel_pred[i - 1] * DT)
+        traj = np.array(traj)
+        rmse = compute_rmse(data, traj)
+        seds_trajs[n_comp] = (rmse, traj)
+        if rmse < best_seds_rmse:
+            best_seds_rmse, best_seds_n = rmse, n_comp
 
-    # --- Plot Comparison ---
+    best_seds_traj = seds_trajs[best_seds_n][1]
+
+    # === PLOT ===
     plt.figure(figsize=(6, 5))
-    plt.plot(demo[:, 0], demo[:, 1], 'k--', label="Demonstration")
-    plt.plot(best_dmp_traj[:, 0], best_dmp_traj[:, 1], 'b-', label=f"DMP (n_bfs={best_dmp_n_bfs})")
-    plt.plot(seds_traj[:, 0], seds_traj[:, 1], 'r:', label="SEDS (GMM)")
-    plt.title(f"{file[:-4]} - DMP vs SEDS\nRMSE: DMP={best_dmp_rmse:.4f}, SEDS={seds_rmse:.4f}")
+    plt.plot(data[:, 0], data[:, 1], 'k--', label="Demonstration")
+    plt.plot(best_dmp_pred[:, 0], best_dmp_pred[:, 1], 'b-', label=f"DMP (n_bfs={best_dmp_n_bfs})")
+    plt.plot(best_seds_traj[:, 0], best_seds_traj[:, 1], 'r:', label=f"SEDS (GMM={best_seds_n})")
+    plt.scatter(*data[0], c='g', label="Start")
+    plt.scatter(*data[-1], c='r', label="Goal")
+    plt.title(f"{file[:-4]} – DMP vs SEDS\nRMSE: DMP={best_dmp_rmse:.4f}, SEDS={best_seds_rmse:.4f}")
     plt.xlabel("X")
     plt.ylabel("Y")
     plt.axis("equal")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f"{file[:-4]}_dmp_vs_seds.png", dpi=300)
+    plt.savefig(f"{file[:-4]}_DMP_SEDS_plot.png", dpi=300)
     plt.show()
 
-    # --- Save Summary ---
+    # === SUMMARY LOG ===
     summary.append({
         "Shape": file[:-4],
         "Best DMP RMSE": round(best_dmp_rmse, 4),
         "Best n_bfs": best_dmp_n_bfs,
-        "SEDS RMSE": round(seds_rmse, 4)
+        "Best SEDS RMSE": round(best_seds_rmse, 4),
+        "Best GMM components": best_seds_n
     })
 
-# === Save Summary Table ===
+# === EXPORT SUMMARY ===
 summary_df = pd.DataFrame(summary)
-summary_df.to_csv("assessment2_dmp_seds_summary.csv", index=False)
-print("\n✅ Results exported to: assessment2_dmp_seds_summary.csv")
+summary_df.to_csv("DMP_SEDS_RMSE_summary.csv", index=False)
+print("\n✅ Done! Summary exported to DMP_SEDS_RMSE_summary.csv")
 print(summary_df)
