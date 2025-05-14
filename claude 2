@@ -1,286 +1,136 @@
-import cv2
-import numpy as np
 import os
-import glob
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from skimage.measure import label, regionprops
+from sklearn.mixture import GaussianMixture
+from scipy.linalg import pinv
 
-# Define path to extracted folder containing images
-extracted_folder = r"C:\Users\Student\Desktop\New folder\ball_frames"
+# === Define Paths ===
+data_folder = "datasets"  # Set this to the folder where the .csv files are
+files = ["CShape.csv", "Line.csv", "WShape.csv", "Sshape.csv"]
+dt = 0.01
 
-# Find all PNG files
-try:
-    all_files = glob.glob(os.path.join(extracted_folder, "*.png"))
-    if not all_files:
-        print(f"No PNG files found in {extracted_folder}. Please check the path.")
-        sys.exit(1)
-except Exception as e:
-    print(f"Error accessing directory: {e}")
-    sys.exit(1)
+# === DMP Class ===
+class DMP:
+    def __init__(self, n_basis=30, alpha=48.0, beta=None):
+        self.n_basis = n_basis
+        self.alpha = alpha
+        self.beta = beta if beta is not None else alpha / 4.0
 
-# Separate RGB images and mask images
-rgb_images = sorted([f for f in all_files if "_GT" not in f])
-mask_images = sorted([f for f in all_files if "_GT" in f])
+    def generate_basis_functions(self, time, duration):
+        self.centers = np.exp(-self.alpha * np.linspace(0, 1, self.n_basis))
+        self.widths = np.ones(self.n_basis) * self.n_basis ** 1.5 / self.centers / duration
 
-print(f"Found {len(rgb_images)} RGB images and {len(mask_images)} mask images.")
+    def imitate(self, y_demo, duration=1.0, dt=0.01):
+        self.timesteps = int(duration / dt)
+        self.time = np.linspace(0, duration, self.timesteps)
+        self.y0 = y_demo[0]
+        self.goal = y_demo[-1]
 
-# Validate that we have matching pairs
-if len(rgb_images) == 0 or len(mask_images) == 0:
-    print("Error: Missing RGB images or mask images.")
-    sys.exit(1)
+        x = np.exp(-self.alpha * self.time / duration)
+        y_demo = np.array(y_demo)
+        dy = np.gradient(y_demo, axis=0) / dt
+        ddy = np.gradient(dy, axis=0) / dt
 
-def ball_segmentation(image_path):
-    """Segment colored balls in an image using color-based thresholding."""
-    img = cv2.imread(image_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-    
-    # Define color ranges for different balls
-    masks = [
-        cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255])),    # Red (low)
-        cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255])), # Red (high)
-        cv2.inRange(hsv, np.array([100, 100, 100]), np.array([140, 255, 255])), # Blue
-        cv2.inRange(hsv, np.array([40, 100, 100]), np.array([80, 255, 255])),   # Green
-        cv2.inRange(hsv, np.array([20, 100, 100]), np.array([35, 255, 255])),   # Yellow
-        cv2.inRange(hsv, np.array([10, 100, 100]), np.array([20, 255, 255])),   # Orange
-        cv2.inRange(hsv, np.array([140, 50, 100]), np.array([170, 255, 255]))   # Pink/purple
-    ]
-    
-    # Combine masks and apply morphological operations
-    combined_mask = np.zeros_like(masks[0])
-    for mask in masks:
-        combined_mask = combined_mask | mask
-        
-    kernel = np.ones((5, 5), np.uint8)
-    mask_cleaned = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-    mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel)
-    
-    # Remove small regions
-    labeled_mask = label(mask_cleaned)
-    clean_mask = np.zeros_like(mask_cleaned)
-    for prop in regionprops(labeled_mask):
-        if prop.area >= 200:  # Minimum ball size
-            clean_mask[labeled_mask == prop.label] = 255
-            
-    return clean_mask, img  # Return both the mask and original image
+        self.generate_basis_functions(self.time, duration)
+        psi = np.exp(-self.widths[:, None] * (x - self.centers[:, None]) ** 2)
+        f_target = (ddy - self.alpha * (self.beta * (self.goal - y_demo) - dy)) * duration**2
 
-def calculate_dsc(pred_mask, gt_mask):
-    """Calculate Dice Similarity Coefficient."""
-    # Ensure both masks are binary
-    pred_mask = pred_mask > 0
-    gt_mask = gt_mask > 0
-    
-    intersection = np.logical_and(pred_mask, gt_mask).sum()
-    union = pred_mask.sum() + gt_mask.sum()
-    
-    return (2.0 * intersection) / union if union > 0 else 1.0 if intersection == 0 else 0.0
+        denom = np.sum(psi, axis=0) + 1e-10
+        psi_normalized = psi / denom
+        self.weights = np.dot(psi_normalized, f_target)
 
-def create_overlay(original, mask, color_channel=1):
-    """Create an overlay of mask on original image."""
-    # Ensure mask is binary
-    binary_mask = (mask > 0).astype(np.uint8) * 255
-    
-    overlay = original.copy()
-    mask_rgb = np.zeros_like(original)
-    mask_rgb[:,:,color_channel] = binary_mask  # Default: Green channel (1) for predictions
-    return cv2.addWeighted(overlay, 0.7, mask_rgb, 0.3, 0)
+    def rollout(self, duration=1.0, dt=0.01):
+        y = np.zeros((self.timesteps, 2))
+        dy = np.zeros((self.timesteps, 2))
+        ddy = np.zeros((self.timesteps, 2))
+        y[0] = self.y0
+        dy[0] = 0
 
-def main():
-    # Setup paths
-    data_dir = "ball_frames"
-    rgb_files = sorted(glob.glob(os.path.join(data_dir, "*[!_GT].png")))
-    
-    results = {}
-    dsc_values = []
-    
-    # Process images
-    for rgb_path in rgb_files:
-        base_name = os.path.basename(rgb_path).split('.')[0]
-        frame_num = int(base_name.replace("frame-", ""))
-        
-        # Find corresponding ground truth
-        gt_path = os.path.join(data_dir, f"{base_name}_GT.png")
-        if not os.path.exists(gt_path):
-            print(f"No ground truth for frame {frame_num}")
-            continue
-            
-        # Process image and calculate DSC
-        pred_mask, original_img = ball_segmentation(rgb_path)
-        
-        # Read and binarize ground truth mask
-        gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
-        gt_mask_binary = (gt_mask > 0).astype(np.uint8) * 255
-        
-        dsc = calculate_dsc(pred_mask, gt_mask_binary)
-        
-        dsc_values.append(dsc)
-        results[frame_num] = {
-            'rgb_path': rgb_path,
-            'original_img': original_img,
-            'pred_mask': pred_mask,
-            'gt_mask': gt_mask_binary,  # Store the binary version
-            'dsc': dsc
-        }
-        print(f"Frame {frame_num}: DSC = {dsc:.4f}")
-    
-    # Calculate statistics
-    mean_dsc = np.mean(dsc_values)
-    std_dsc = np.std(dsc_values)
-    print(f"Mean DSC: {mean_dsc:.4f} ± {std_dsc:.4f}")
-    
-    # Create output directory
-    os.makedirs("results", exist_ok=True)
-    
-    # Get best and worst frames
-    frames_by_dsc = sorted(results.keys(), key=lambda k: results[k]['dsc'])
-    worst_frames = frames_by_dsc[:5]
-    best_frames = frames_by_dsc[-5:]
-    
-    print(f"Best frames: {best_frames}")
-    print(f"Worst frames: {worst_frames}")
-    
-    # Create comprehensive visualization of all results
-    fig = plt.figure(figsize=(20, 20))
-    
-    # First section: DSC bar chart
-    ax_bar = plt.subplot2grid((8, 5), (0, 0), colspan=5, rowspan=2)
-    ax_bar.bar(sorted(results.keys()), [results[k]['dsc'] for k in sorted(results.keys())])
-    ax_bar.set_xlabel('Image Index')
-    ax_bar.set_ylabel('DSC')
-    ax_bar.set_title(f'Segmentation Results: Mean DSC = {mean_dsc:.4f} ± {std_dsc:.4f}')
-    ax_bar.set_ylim(0, 1)
-    ax_bar.grid(axis='y', alpha=0.7)
-    
-    # Section divider for best frames
-    ax_title_best = plt.subplot2grid((8, 5), (2, 0), colspan=5)
-    ax_title_best.text(0.5, 0.5, "BEST 5 FRAMES", fontsize=16, 
-                  horizontalalignment='center', verticalalignment='center')
-    ax_title_best.axis('off')
-    
-    # Best frames section
-    for i, frame_num in enumerate(best_frames):
-        frame_data = results[frame_num]
-        
-        # Create row for this frame
-        row_idx = 3
-        
-        # Original image
-        ax_orig = plt.subplot2grid((8, 15), (row_idx, i*3), colspan=1)
-        ax_orig.imshow(frame_data['original_img'])
-        ax_orig.set_title(f"Frame {frame_num}\nDSC: {frame_data['dsc']:.4f}")
-        ax_orig.axis('off')
-        
-        # Prediction overlay
-        ax_pred = plt.subplot2grid((8, 15), (row_idx, i*3+1), colspan=1)
-        pred_overlay = create_overlay(frame_data['original_img'], frame_data['pred_mask'], color_channel=1)  # Green
-        ax_pred.imshow(pred_overlay)
-        ax_pred.set_title("Prediction")
-        ax_pred.axis('off')
-        
-        # Ground truth overlay
-        ax_gt = plt.subplot2grid((8, 15), (row_idx, i*3+2), colspan=1)
-        gt_overlay = create_overlay(frame_data['original_img'], frame_data['gt_mask'], color_channel=0)  # Red
-        ax_gt.imshow(gt_overlay)
-        ax_gt.set_title("Ground Truth")
-        ax_gt.axis('off')
-    
-    # Section divider for worst frames
-    ax_title_worst = plt.subplot2grid((8, 5), (5, 0), colspan=5)
-    ax_title_worst.text(0.5, 0.5, "WORST 5 FRAMES", fontsize=16, 
-                   horizontalalignment='center', verticalalignment='center')
-    ax_title_worst.axis('off')
-    
-    # Worst frames section
-    for i, frame_num in enumerate(worst_frames):
-        frame_data = results[frame_num]
-        
-        # Create row for this frame
-        row_idx = 6
-        
-        # Original image
-        ax_orig = plt.subplot2grid((8, 15), (row_idx, i*3), colspan=1)
-        ax_orig.imshow(frame_data['original_img'])
-        ax_orig.set_title(f"Frame {frame_num}\nDSC: {frame_data['dsc']:.4f}")
-        ax_orig.axis('off')
-        
-        # Prediction overlay
-        ax_pred = plt.subplot2grid((8, 15), (row_idx, i*3+1), colspan=1)
-        pred_overlay = create_overlay(frame_data['original_img'], frame_data['pred_mask'], color_channel=1)  # Green
-        ax_pred.imshow(pred_overlay)
-        ax_pred.set_title("Prediction")
-        ax_pred.axis('off')
-        
-        # Ground truth overlay
-        ax_gt = plt.subplot2grid((8, 15), (row_idx, i*3+2), colspan=1)
-        gt_overlay = create_overlay(frame_data['original_img'], frame_data['gt_mask'], color_channel=0)  # Red
-        ax_gt.imshow(gt_overlay)
-        ax_gt.set_title("Ground Truth")
-        ax_gt.axis('off')
-    
+        x = 1.0
+        for t in range(1, self.timesteps):
+            psi = np.exp(-self.widths * (x - self.centers) ** 2)
+            f = (psi @ self.weights) / (np.sum(psi) + 1e-10)
+
+            ddy[t - 1] = self.alpha * (self.beta * (self.goal - y[t - 1]) - dy[t - 1]) + f / duration**2
+            dy[t] = dy[t - 1] + ddy[t - 1] * dt
+            y[t] = y[t - 1] + dy[t] * dt
+
+            x -= self.alpha * x * dt / duration
+
+        return y
+
+# === GMR Function ===
+def gmr(gmm, x_query):
+    D = x_query.shape[1]
+    means = gmm.means_
+    covs = gmm.covariances_
+    priors = gmm.weights_
+    d_out = means.shape[1] - D
+    y_pred = []
+
+    for x in x_query:
+        h = np.zeros(gmm.n_components)
+        y = np.zeros(d_out)
+        for i in range(gmm.n_components):
+            mu_x = means[i, :D]
+            mu_y = means[i, D:]
+            Sigma_xx = covs[i][:D, :D]
+            Sigma_yx = covs[i][D:, :D]
+
+            det = np.linalg.det(Sigma_xx + 1e-6 * np.eye(D))
+            norm_const = 1.0 / (np.sqrt((2 * np.pi) ** D * det))
+            exp_term = np.exp(-0.5 * (x - mu_x) @ pinv(Sigma_xx) @ (x - mu_x))
+            h[i] = priors[i] * norm_const * exp_term
+
+        h /= np.sum(h) + 1e-8
+
+        for i in range(gmm.n_components):
+            mu_x = means[i, :D]
+            mu_y = means[i, D:]
+            Sigma_xx = covs[i][:D, :D]
+            Sigma_yx = covs[i][D:, :D]
+            y += h[i] * (mu_y + Sigma_yx @ pinv(Sigma_xx) @ (x - mu_x))
+
+        y_pred.append(y)
+    return np.array(y_pred)
+
+# === Process Each File ===
+for file in files:
+    print(f"\nProcessing {file}...")
+    path = os.path.join(data_folder, file)
+    data = pd.read_csv(path).to_numpy()
+
+    if data.shape[0] < 3:
+        print(f"Skipping {file}: Not enough points ({data.shape[0]} rows)")
+        continue
+
+    # --- DMP ---
+    dmp = DMP(n_basis=30)
+    dmp.imitate(data)
+    dmp_traj = dmp.rollout()
+
+    # --- SEDS via GMM+GMR ---
+    vel = np.gradient(data, axis=0) / dt
+    X_train = np.hstack((data, vel))
+    gmm = GaussianMixture(n_components=5, covariance_type='full', random_state=0).fit(X_train)
+    new_vel = gmr(gmm, data)
+
+    seds_traj = [data[0]]
+    for i in range(1, len(new_vel)):
+        seds_traj.append(seds_traj[-1] + new_vel[i - 1] * dt)
+    seds_traj = np.array(seds_traj)
+
+    # --- Plot ---
+    plt.figure(figsize=(6, 6))
+    plt.plot(data[:, 0], data[:, 1], label='Original', linewidth=2)
+    plt.plot(dmp_traj[:, 0], dmp_traj[:, 1], '--', label='DMP')
+    plt.plot(seds_traj[:, 0], seds_traj[:, 1], ':', label='SEDS (GMR)')
+    plt.title(f"Trajectory Learning - {file[:-4]}")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.axis('equal')
+    plt.grid(True)
+    plt.legend()
     plt.tight_layout()
-    plt.savefig('results/comprehensive_results.png', dpi=300, bbox_inches='tight')
-    print("\nDisplaying comprehensive visualization...")
     plt.show()
-    
-    # Save individual results for best and worst frames
-    os.makedirs("results/best", exist_ok=True)
-    os.makedirs("results/worst", exist_ok=True)
-    
-    print("\nSaving individual visualizations...")
-    
-    # Save best frames
-    for frame_num in best_frames:
-        frame_data = results[frame_num]
-        
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        
-        # Original
-        axes[0].imshow(frame_data['original_img'])
-        axes[0].set_title("Original")
-        axes[0].axis('off')
-        
-        # Prediction
-        pred_overlay = create_overlay(frame_data['original_img'], frame_data['pred_mask'], color_channel=1)
-        axes[1].imshow(pred_overlay)
-        axes[1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
-        axes[1].axis('off')
-        
-        # Ground truth
-        gt_overlay = create_overlay(frame_data['original_img'], frame_data['gt_mask'], color_channel=0)
-        axes[2].imshow(gt_overlay)
-        axes[2].set_title("Ground Truth")
-        axes[2].axis('off')
-        
-        plt.tight_layout()
-        plt.savefig(f"results/best/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png", dpi=300)
-        plt.close()
-    
-    # Save worst frames
-    for frame_num in worst_frames:
-        frame_data = results[frame_num]
-        
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        
-        # Original
-        axes[0].imshow(frame_data['original_img'])
-        axes[0].set_title("Original")
-        axes[0].axis('off')
-        
-        # Prediction
-        pred_overlay = create_overlay(frame_data['original_img'], frame_data['pred_mask'], color_channel=1)
-        axes[1].imshow(pred_overlay)
-        axes[1].set_title(f"Prediction (DSC: {frame_data['dsc']:.4f})")
-        axes[1].axis('off')
-        
-        # Ground truth
-        gt_overlay = create_overlay(frame_data['original_img'], frame_data['gt_mask'], color_channel=0)
-        axes[2].imshow(gt_overlay)
-        axes[2].set_title("Ground Truth")
-        axes[2].axis('off')
-        
-        plt.tight_layout()
-        plt.savefig(f"results/worst/frame_{frame_num}_dsc_{frame_data['dsc']:.4f}.png", dpi=300)
-        plt.close()
-
-if __name__ == "__main__":
-    main()
