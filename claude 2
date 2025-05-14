@@ -1,113 +1,87 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 from pydmps.dmp_discrete import DMPs_discrete
 
-# ----- STEP 1: Load and prepare the trajectory -----
+# Folder and files
 demo_folder = r"C:\Users\Student\Desktop\Assessment Item 2 - datasets\datasets"
-demo_file = "SShape.csv"
+trajectory_files = ["CShape.csv", "Line.csv", "WShape.csv", "SShape.csv"]
 
-# Correctly join the paths using os.path.join() to create the full file path
-file_path = os.path.join(demo_folder, demo_file)
-
-# Load the demonstration trajectory
-if os.path.exists(file_path):
-    y_demo = np.loadtxt(file_path, delimiter=",").T  # Final shape: (150, 2)
-    print("Fixed trajectory shape:", y_demo.shape)
-else:
-    print(f"Error: {file_path} not found!")
-    exit()  # Exit if file is not found
-
-# ----- STEP 2: RMSE function -----
+# RMSE function
 def compute_rmse(y_true, y_pred):
     return np.sqrt(np.mean(np.sum((y_true - y_pred) ** 2, axis=1)))
 
-# ----- STEP 3: Evaluate DMPs with different n_bfs -----
-n_bfs_list = list(range(10, 301, 10))  # Range of basis functions to test
-rmse_list = []
-trajectories = []
+# Loop through each dataset
+for demo_file in trajectory_files:
+    file_path = os.path.join(demo_folder, demo_file)
+    if not os.path.exists(file_path):
+        print(f"Skipping {demo_file} – File not found.")
+        continue
 
-# Use only the first (T-1) points for training and RMSE
-y_demo_trimmed = y_demo[:-1]  # Trim the last point (to match the length of the time steps)
-timesteps = len(y_demo_trimmed)
-dt = 1.0 / timesteps  # Time step based on number of data points
+    # Load trajectory
+    y_demo = np.loadtxt(file_path, delimiter=",").T
+    if y_demo.shape[0] < 2:
+        print(f"Skipping {demo_file} – Too few data points.")
+        continue
 
-# Loop through different number of basis functions
-for n_bfs in n_bfs_list:
-    # Initialize DMP with 2 dimensions and n_bfs basis functions
-    dmp = DMPs_discrete(n_dmps=2, n_bfs=n_bfs, dt=dt)
-    dmp.y0 = y_demo[0]  # Set initial position (first point in the demo)
-    dmp.goal = y_demo[-1]  # Set goal position (last point in the demo)
-    dmp.timesteps = timesteps  # Set number of timesteps (trajectory length)
+    print(f"\nProcessing {demo_file} ...")
+    
+    y_demo_trimmed = y_demo[:-1]
+    timesteps = len(y_demo_trimmed)
+    dt = 1.0 / timesteps
 
-    # Imitate the trajectory (train the DMP)
-    dmp.imitate_path(y_des=y_demo_trimmed.T)  # Transpose the trajectory to fit DMP shape (2, T-1)
-    y_pred, _, _ = dmp.rollout()  # Generate the predicted trajectory
+    n_bfs_list = list(range(10, 301, 10))
+    rmse_list = []
+    trajectories = []
 
-    # Compute the RMSE for the imitation
-    rmse = compute_rmse(y_demo_trimmed, y_pred)
-    rmse_list.append(rmse)  # Store RMSE for each n_bfs
-    trajectories.append(y_pred)  # Store the trajectory for each n_bfs
+    for n_bfs in n_bfs_list:
+        dmp = DMPs_discrete(n_dmps=2, n_bfs=n_bfs, dt=dt)
+        dmp.y0 = y_demo[0]
+        dmp.goal = y_demo[-1]
+        dmp.timesteps = timesteps
 
-    # Print the RMSE for the current number of basis functions
-    print(f"n_bfs = {n_bfs:3d} → RMSE = {rmse:.4f}")
+        dmp.imitate_path(y_des=y_demo_trimmed.T)
+        y_pred, _, _ = dmp.rollout()
 
-# ----- STEP 4: Plot best DMP trajectory vs demonstration -----
-# Find the best result (minimum RMSE)
-best_idx = np.argmin(rmse_list)
-best_n_bfs = n_bfs_list[best_idx]
-best_pred = trajectories[best_idx]
+        rmse = compute_rmse(y_demo_trimmed, y_pred)
+        rmse_list.append(rmse)
+        trajectories.append(y_pred)
 
-# Plot the best DMP trajectory compared to the demonstration
-plt.figure(figsize=(6, 5))
-plt.plot(y_demo_trimmed[:, 0], y_demo_trimmed[:, 1], 'k--', label='Demonstration')
-plt.plot(best_pred[:, 0], best_pred[:, 1], 'b-', label=f'DMP (n_bfs={best_n_bfs})')
-plt.scatter(*y_demo[0], c='g', label='Start')
-plt.scatter(*y_demo[-1], c='r', label='Goal')
-plt.title(f"Best DMP Trajectory (n_bfs={best_n_bfs})\nRMSE = {rmse_list[best_idx]:.4f}")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.axis("equal")
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-plt.show()
+        print(f"{demo_file}: n_bfs = {n_bfs:3d} → RMSE = {rmse:.4f}")
 
-# ----- STEP 5: Plot RMSE vs n_bfs -----
-# Plot the RMSE against the number of basis functions
-plt.figure(figsize=(6, 4))
-plt.plot(n_bfs_list, rmse_list, marker='o', linestyle='-')
-plt.title("RMSE vs. Number of Basis Functions")
-plt.xlabel("n_bfs")
-plt.ylabel("RMSE")
-plt.grid(True)
-plt.tight_layout()
-plt.savefig("SShape_rmse_vs_n_bfs.png", dpi=300, bbox_inches='tight')
-plt.show()
+    # Best trajectory plot
+    best_idx = np.argmin(rmse_list)
+    best_n_bfs = n_bfs_list[best_idx]
+    best_pred = trajectories[best_idx]
+    rmse_best = rmse_list[best_idx]
 
-# ----- STEP 6: Plot the DMP result for n_bfs = 150 -----
-# Specify the number of basis functions for which you want to plot the result
-target_n_bfs = 130
-
-if target_n_bfs in n_bfs_list:
-    idx = n_bfs_list.index(target_n_bfs)
-    y_pred_150 = trajectories[idx]
-    rmse_150 = rmse_list[idx]
-
-    # Plot the DMP trajectory for the specified n_bfs
     plt.figure(figsize=(6, 5))
     plt.plot(y_demo_trimmed[:, 0], y_demo_trimmed[:, 1], 'k--', label='Demonstration')
-    plt.plot(y_pred_150[:, 0], y_pred_150[:, 1], 'b-', label=f'DMP (n_bfs={target_n_bfs})')
+    plt.plot(best_pred[:, 0], best_pred[:, 1], 'b-', label=f'DMP (n_bfs={best_n_bfs})')
     plt.scatter(*y_demo[0], c='g', label='Start')
     plt.scatter(*y_demo[-1], c='r', label='Goal')
-    plt.title(f"DMP Trajectory (n_bfs={target_n_bfs})\nRMSE = {rmse_150:.4f}")
+    plt.title(f"{demo_file[:-4]} - Best DMP Trajectory\nRMSE = {rmse_best:.4f}")
     plt.xlabel("X")
     plt.ylabel("Y")
     plt.axis("equal")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f"SShape_dmp_trajectory_n_bfs_{target_n_bfs}.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{demo_file[:-4]}_best_dmp_trajectory.png", dpi=300)
     plt.show()
-else:
-    print(f"n_bfs = {target_n_bfs} not found in n_bfs_list")
+
+    # RMSE vs n_bfs plot
+    plt.figure(figsize=(6, 4))
+    plt.plot(n_bfs_list, rmse_list, marker='o', linestyle='-')
+    plt.title(f"{demo_file[:-4]} - RMSE vs. Number of Basis Functions")
+    plt.xlabel("n_bfs")
+    plt.ylabel("RMSE")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"{demo_file[:-4]}_rmse_vs_n_bfs.png", dpi=300)
+    plt.show()
+
+    # Export RMSE data
+    df = pd.DataFrame({"n_bfs": n_bfs_list, "RMSE": rmse_list})
+    df.to_csv(f"{demo_file[:-4]}_rmse_data.csv", index=False)
